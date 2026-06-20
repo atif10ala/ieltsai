@@ -860,6 +860,12 @@ def init_session_state() -> None:
     if "last_speaking_submission" not in st.session_state:
         st.session_state.last_speaking_submission = None
 
+    # --- Visual theme state ---
+    if "theme_key" not in st.session_state:
+        st.session_state.theme_key = DEFAULT_THEME_KEY
+    if "custom_theme" not in st.session_state:
+        st.session_state.custom_theme = THEME_REGISTRY[DEFAULT_THEME_KEY]
+
     # --- Exam Timer state ---
     if "timer_preset" not in st.session_state:
         st.session_state.timer_preset = "Task 2 (40 Minutes)"
@@ -934,10 +940,17 @@ def format_mm_ss(total_seconds: float) -> str:
 # and radar chart pixel-perfect, on-brand, and dependency-free for instant
 # Streamlit Community Cloud cold-starts — no matplotlib, no plotly.
 
-def render_skill_radar_svg(scores: WritingScore, size: int = 320) -> str:
+def render_skill_radar_svg(
+    scores: WritingScore,
+    size: int = 320,
+    accent_color: str = "#C9A227",
+    text_color: str = "#F7F5F0",
+    grid_color: str = "#3A3528",
+) -> str:
     """
     Builds a 4-axis radar chart (Task Achievement, Coherence, Lexical
-    Resource, Grammar) as raw SVG, scaled to IELTS bands 0-9.
+    Resource, Grammar) as raw SVG, scaled to IELTS bands 0-9. Colours are
+    parameters so the chart restyles with the active visual theme.
     """
     labels = ["Task Achievement", "Coherence & Cohesion", "Lexical Resource", "Grammatical Range"]
     values = scores.as_radar_values()
@@ -957,12 +970,12 @@ def render_skill_radar_svg(scores: WritingScore, size: int = 320) -> str:
 
     grid_rings = "".join(
         f'<circle cx="{center}" cy="{center}" r="{radius * frac:.1f}" '
-        f'fill="none" stroke="#3A3528" stroke-width="0.5" opacity="0.5"/>'
+        f'fill="none" stroke="{grid_color}" stroke-width="0.5" opacity="0.5"/>'
         for frac in (0.25, 0.5, 0.75, 1.0)
     )
     axis_lines = "".join(
         f'<line x1="{center}" y1="{center}" x2="{axis_point(i)[0]:.1f}" y2="{axis_point(i)[1]:.1f}" '
-        f'stroke="#3A3528" stroke-width="0.5" opacity="0.6"/>'
+        f'stroke="{grid_color}" stroke-width="0.5" opacity="0.6"/>'
         for i in range(4)
     )
     polygon_points = " ".join(f"{point(i, v)[0]:.1f},{point(i, v)[1]:.1f}" for i, v in enumerate(values))
@@ -975,12 +988,12 @@ def render_skill_radar_svg(scores: WritingScore, size: int = 320) -> str:
         dx, dy = label_offsets[i]
         labels_svg += (
             f'<text x="{lx + dx:.1f}" y="{ly + dy:.1f}" text-anchor="{label_anchors[i]}" '
-            f'font-family="Inter, sans-serif" font-size="11" font-weight="600" fill="#C9A227">'
+            f'font-family="Inter, sans-serif" font-size="11" font-weight="600" fill="{accent_color}">'
             f"{html.escape(label)}</text>"
         )
         labels_svg += (
             f'<text x="{lx + dx:.1f}" y="{ly + dy + 13:.1f}" text-anchor="{label_anchors[i]}" '
-            f'font-family="Inter, sans-serif" font-size="13" font-weight="700" fill="#F7F5F0">'
+            f'font-family="Inter, sans-serif" font-size="13" font-weight="700" fill="{text_color}">'
             f"{values[i]:.1f}</text>"
         )
 
@@ -989,9 +1002,9 @@ def render_skill_radar_svg(scores: WritingScore, size: int = 320) -> str:
          aria-label="Radar chart of writing band scores across four IELTS criteria">
         {grid_rings}
         {axis_lines}
-        <polygon points="{polygon_points}" fill="#C9A227" fill-opacity="0.22"
-                 stroke="#C9A227" stroke-width="2" stroke-linejoin="round"/>
-        {"".join(f'<circle cx="{point(i, v)[0]:.1f}" cy="{point(i, v)[1]:.1f}" r="3.5" fill="#C9A227"/>' for i, v in enumerate(values))}
+        <polygon points="{polygon_points}" fill="{accent_color}" fill-opacity="0.22"
+                 stroke="{accent_color}" stroke-width="2" stroke-linejoin="round"/>
+        {"".join(f'<circle cx="{point(i, v)[0]:.1f}" cy="{point(i, v)[1]:.1f}" r="3.5" fill="{accent_color}"/>' for i, v in enumerate(values))}
         {labels_svg}
     </svg>
     """
@@ -1007,16 +1020,34 @@ def _sin(angle: float) -> float:
     return math.sin(angle)
 
 
-def render_band_dial_svg(band: float, label: str = "OVERALL BAND", size: int = 260) -> str:
+def render_band_dial_svg(
+    band: float,
+    label: str = "OVERALL BAND",
+    size: int = 280,
+    track_color: str = "#232B36",
+    needle_color: str = "#C9A227",
+    text_color: str = "#F7F5F0",
+    sub_color: str = "#8A8775",
+    low_color: str = "#9B4A3F",
+    mid_color: str = "#C9A227",
+    high_color: str = "#5E8C6A",
+) -> str:
     """
     Renders a half-circle dial gauge (0-9 IELTS scale) as raw SVG, with a
     needle pointing at the live band score. Used by the standalone Band
     Score Calculator tab for instant, no-API, pure-math visual feedback.
+    All colours are theme-driven parameters so the dial restyles with
+    whichever visual theme the student has selected.
     """
     import math as _math
 
-    cx, cy = size / 2, size * 0.58
-    radius = size * 0.40
+    # Generous bottom margin so the band number + label never clip past
+    # the viewBox edge, regardless of font metrics across browsers.
+    cx, cy = size / 2, size * 0.52
+    radius = size * 0.36
+    bottom_margin = size * 0.30
+    view_h = cy + bottom_margin
+
     max_band = 9.0
     band_clamped = max(0.0, min(max_band, band))
 
@@ -1028,8 +1059,8 @@ def render_band_dial_svg(band: float, label: str = "OVERALL BAND", size: int = 2
     def arc_point(a: float, r: float) -> tuple[float, float]:
         return cx + r * _math.cos(a), cy - r * _math.sin(a)
 
-    # Colour-graded ticks: brick (low) -> gold (mid) -> sage (high)
-    tick_colors = ["#9B4A3F", "#9B4A3F", "#C9A227", "#C9A227", "#C9A227", "#5E8C6A", "#5E8C6A", "#5E8C6A", "#5E8C6A"]
+    # Colour-graded ticks: low -> mid -> high, theme-driven
+    tick_colors = [low_color, low_color, mid_color, mid_color, mid_color, high_color, high_color, high_color, high_color]
     ticks_svg = ""
     for i in range(10):
         a = start_angle - (i / 9) * (start_angle - end_angle)
@@ -1049,35 +1080,37 @@ def render_band_dial_svg(band: float, label: str = "OVERALL BAND", size: int = 2
     needle_x, needle_y = arc_point(angle, radius - 14)
 
     return f"""
-    <svg viewBox="0 0 {size} {size * 0.66:.0f}" width="100%" role="img"
+    <svg viewBox="0 0 {size} {view_h:.0f}" width="100%" role="img"
          aria-label="Dial gauge showing the calculated IELTS band score">
-        <polyline points="{track_points}" fill="none" stroke="#232B36" stroke-width="10" stroke-linecap="round"/>
+        <polyline points="{track_points}" fill="none" stroke="{track_color}" stroke-width="10" stroke-linecap="round"/>
         {ticks_svg}
         <line x1="{cx:.1f}" y1="{cy:.1f}" x2="{needle_x:.1f}" y2="{needle_y:.1f}"
-              stroke="#C9A227" stroke-width="4" stroke-linecap="round"/>
-        <circle cx="{cx:.1f}" cy="{cy:.1f}" r="7" fill="#C9A227"/>
-        <text x="{cx:.1f}" y="{cy + 38:.1f}" text-anchor="middle" font-family="'Source Serif Pro', Georgia, serif"
-              font-size="40" font-weight="700" fill="#F7F5F0">{band_clamped:.1f}</text>
-        <text x="{cx:.1f}" y="{cy + 58:.1f}" text-anchor="middle" font-family="Inter, sans-serif"
-              font-size="10" letter-spacing="1.5" fill="#8A8775">{html.escape(label)}</text>
+              stroke="{needle_color}" stroke-width="4" stroke-linecap="round"/>
+        <circle cx="{cx:.1f}" cy="{cy:.1f}" r="7" fill="{needle_color}"/>
+        <text x="{cx:.1f}" y="{cy + 42:.1f}" text-anchor="middle" font-family="'Source Serif Pro', Georgia, serif"
+              font-size="38" font-weight="700" fill="{text_color}">{band_clamped:.1f}</text>
+        <text x="{cx:.1f}" y="{cy + 64:.1f}" text-anchor="middle" font-family="Inter, sans-serif"
+              font-size="10" letter-spacing="1.5" fill="{sub_color}">{html.escape(label)}</text>
     </svg>
     """
 
 
-def render_band_certificate_svg(overall: float, profile: StudentProfile) -> str:
+def render_band_certificate_svg(overall: float, profile: StudentProfile, accent_color: str = "#C9A227") -> str:
     """
     Renders a facsimile of the official IELTS Test Report Form layout —
     the actual certificate students recognise instantly — filled with the
     student's live AI-estimated band. This is the platform's signature
-    visual element.
+    visual element. Deliberately keeps a cream/black "paper" look regardless
+    of the active app theme (real IELTS certificates always look like this);
+    only the accent border/seal colour follows the chosen theme.
     """
     safe_name = html.escape(profile.name or "Guest Student")
     today_str = datetime.now().strftime("%d %b %Y")
     return f"""
     <svg viewBox="0 0 640 220" width="100%" role="img"
          aria-label="Facsimile IELTS Test Report Form showing the estimated overall band score">
-        <rect x="1" y="1" width="638" height="218" rx="6" fill="#F7F5F0" stroke="#C9A227" stroke-width="1.5"/>
-        <rect x="14" y="14" width="612" height="192" rx="3" fill="none" stroke="#C9A227" stroke-width="0.75" stroke-dasharray="2 3"/>
+        <rect x="1" y="1" width="638" height="218" rx="6" fill="#F7F5F0" stroke="{accent_color}" stroke-width="1.5"/>
+        <rect x="14" y="14" width="612" height="192" rx="3" fill="none" stroke="{accent_color}" stroke-width="0.75" stroke-dasharray="2 3"/>
         <text x="32" y="42" font-family="'Source Serif Pro', Georgia, serif" font-size="15" font-weight="700" fill="#1A1A1A">
             TEST REPORT FORM (FACSIMILE)
         </text>
@@ -1090,7 +1123,7 @@ def render_band_certificate_svg(overall: float, profile: StudentProfile) -> str:
         <text x="32" y="138" font-family="Inter, sans-serif" font-size="11" fill="#5B5B5B">TARGET BAND</text>
         <text x="32" y="156" font-family="Inter, sans-serif" font-size="14" font-weight="600" fill="#1A1A1A">{profile.target_band:.1f}</text>
         <circle cx="540" cy="120" r="58" fill="none" stroke="#1A1A1A" stroke-width="2"/>
-        <circle cx="540" cy="120" r="50" fill="none" stroke="#C9A227" stroke-width="1"/>
+        <circle cx="540" cy="120" r="50" fill="none" stroke="{accent_color}" stroke-width="1"/>
         <text x="540" y="112" text-anchor="middle" font-family="Inter, sans-serif" font-size="10" fill="#5B5B5B">OVERALL BAND</text>
         <text x="540" y="146" text-anchor="middle" font-family="'Source Serif Pro', Georgia, serif"
               font-size="34" font-weight="700" fill="#1A1A1A">{overall:.1f}</text>
@@ -1102,22 +1135,22 @@ def render_fingerprint_bars_html(entries: list[FingerprintEntry]) -> str:
     """Renders the recurring-mistake fingerprint as a clean horizontal bar list."""
     if not entries:
         return (
-            '<div style="padding:1.2rem; color:#8A8775; font-size:0.9rem;">'
+            '<div style="padding:1.2rem; color:var(--slate); font-size:0.9rem;">'
             "No recurring error pattern detected yet — submit a few more essays "
             "or speaking responses to build your fingerprint."
             "</div>"
         )
     max_count = max(e.count for e in entries) or 1
     trend_styles = {
-        "improving": ("#4ADE80", "↓ improving"),
-        "worsening": ("#F87171", "↑ worsening"),
-        "steady": ("#C9A227", "→ steady"),
-        "new": ("#94A3B8", "new"),
+        "improving": ("var(--sage)", "↓ improving"),
+        "worsening": ("var(--warning)", "↑ worsening"),
+        "steady": ("var(--gold)", "→ steady"),
+        "new": ("var(--slate)", "new"),
     }
     rows: list[str] = []
     for entry in entries:
         width_pct = max(8, int((entry.count / max_count) * 100))
-        color, trend_label = trend_styles.get(entry.trend, ("#94A3B8", entry.trend))
+        color, trend_label = trend_styles.get(entry.trend, ("var(--slate)", entry.trend))
         # NOTE: built as a single line with no embedded newlines/indentation.
         # Streamlit's markdown renderer treats a multi-line f-string here as
         # Markdown source, not pure HTML. Once two rows are joined, the
@@ -1129,11 +1162,11 @@ def render_fingerprint_bars_html(entries: list[FingerprintEntry]) -> str:
         row = (
             '<div style="margin-bottom: 0.85rem;">'
             '<div style="display:flex; justify-content:space-between; font-size:0.85rem; margin-bottom:0.3rem;">'
-            f'<span style="color:#F7F5F0; font-weight:600;">{html.escape(entry.label)}</span>'
+            f'<span style="color:var(--parchment); font-weight:600;">{html.escape(entry.label)}</span>'
             f'<span style="color:{color}; font-size:0.75rem; font-weight:600;">{trend_label} · ×{entry.count}</span>'
             "</div>"
-            '<div style="background:#1E1B14; border-radius:6px; height:8px; overflow:hidden;">'
-            f'<div style="background:#C9A227; width:{width_pct}%; height:100%; border-radius:6px;"></div>'
+            '<div style="background:var(--track-bg); border-radius:6px; height:8px; overflow:hidden;">'
+            f'<div style="background:var(--gold); width:{width_pct}%; height:100%; border-radius:6px;"></div>'
             "</div>"
             "</div>"
         )
@@ -1154,6 +1187,119 @@ st.set_page_config(
 
 
 # ══════════════════════════════════════════════════════════════════════════
+# LAYER 11B — VISUAL THEME REGISTRY
+# ══════════════════════════════════════════════════════════════════════════
+# Every theme is just a dict of CSS variable values. The stylesheet below
+# (Layer 12) is written entirely in terms of these variables, so swapping
+# the active theme is a single dict swap — no duplicated CSS, no per-theme
+# stylesheet files. "Custom" lets the student build their own from color
+# pickers, stored for the session.
+
+@dataclass(frozen=True)
+class Theme:
+    key: str
+    name: str
+    emoji: str
+    ink: str            # page background
+    ink_raised: str      # card / panel background
+    ink_border: str       # hairline borders
+    sidebar_bg: str       # sidebar background (often a touch darker than ink)
+    parchment: str        # primary text
+    parchment_dim: str    # secondary/dim text
+    accent: str            # primary accent (buttons, highlights, headings)
+    accent_bright: str     # accent hover state
+    accent_text: str       # text rendered ON TOP of the accent (e.g. button label)
+    slate: str             # muted/caption text
+    brick: str             # "needs work" / danger severity color
+    sage: str              # "strong" / success severity color
+    warning: str           # timer/word-goal danger red
+    track_bg: str          # progress-track / goal-bar background
+
+
+THEME_REGISTRY: dict[str, Theme] = {
+    "examiner_gold": Theme(
+        key="examiner_gold", name="Examiner Gold (Classic)", emoji="🎓",
+        ink="#0B0F14", ink_raised="#11161D", ink_border="#232B36", sidebar_bg="#080B0F",
+        parchment="#F7F5F0", parchment_dim="#C9C6BC",
+        accent="#C9A227", accent_bright="#E0BE4A", accent_text="#16130A",
+        slate="#8A8775", brick="#9B4A3F", sage="#5E8C6A", warning="#F87171", track_bg="#1E1B14",
+    ),
+    "sakura": Theme(
+        key="sakura", name="Sakura (White & Pink)", emoji="🌸",
+        ink="#FFF6F8", ink_raised="#FFFFFF", ink_border="#F4D7E1", sidebar_bg="#FFEDF2",
+        parchment="#3D2933", parchment_dim="#7A5C66",
+        accent="#E8799A", accent_bright="#F4A6BF", accent_text="#FFFFFF",
+        slate="#A9818D", brick="#C25B5B", sage="#5E9C7E", warning="#D94F70", track_bg="#FBE3EA",
+    ),
+    "cyberpunk": Theme(
+        key="cyberpunk", name="Cyberpunk Neon", emoji="🌆",
+        ink="#0A0014", ink_raised="#150826", ink_border="#3A1A5C", sidebar_bg="#05000C",
+        parchment="#F2E8FF", parchment_dim="#C7A9E8",
+        accent="#FF2E97", accent_bright="#00F0FF", accent_text="#0A0014",
+        slate="#9C7BC9", brick="#FF4D4D", sage="#39FF8F", warning="#FF2E97", track_bg="#1E0B33",
+    ),
+    "anime_sunset": Theme(
+        key="anime_sunset", name="Anime Sunset", emoji="🌇",
+        ink="#1A0F1F", ink_raised="#241531", ink_border="#3D2447", sidebar_bg="#150A1B",
+        parchment="#FFF1E6", parchment_dim="#E0B8C6",
+        accent="#FF6B6B", accent_bright="#FFA36B", accent_text="#1A0F1F",
+        slate="#C896A6", brick="#E14B5A", sage="#4ECDC4", warning="#FF6B6B", track_bg="#2C1A33",
+    ),
+    "forest_zen": Theme(
+        key="forest_zen", name="Forest Zen", emoji="🌿",
+        ink="#10160F", ink_raised="#161F14", ink_border="#2B3A28", sidebar_bg="#0B0F0A",
+        parchment="#EDF2E8", parchment_dim="#B9C6B2",
+        accent="#7FB069", accent_bright="#9FD382", accent_text="#0E1A0C",
+        slate="#8FA085", brick="#C1666B", sage="#7FB069", warning="#E8896B", track_bg="#1B2418",
+    ),
+    "midnight_ocean": Theme(
+        key="midnight_ocean", name="Midnight Ocean", emoji="🌊",
+        ink="#06121C", ink_raised="#0C1E2C", ink_border="#1C3A4D", sidebar_bg="#040D14",
+        parchment="#E8F4F8", parchment_dim="#9FC1CE",
+        accent="#3FB8C9", accent_bright="#6BD9E8", accent_text="#06121C",
+        slate="#6E96A3", brick="#D9695F", sage="#52C97F", warning="#FF8A65", track_bg="#0F2330",
+    ),
+}
+
+DEFAULT_THEME_KEY = "examiner_gold"
+
+
+def get_active_theme() -> Theme:
+    """Resolves the current theme, including a session-built Custom theme."""
+    if st.session_state.get("theme_key") == "custom":
+        return st.session_state.get("custom_theme", THEME_REGISTRY[DEFAULT_THEME_KEY])
+    return THEME_REGISTRY.get(st.session_state.get("theme_key", DEFAULT_THEME_KEY), THEME_REGISTRY[DEFAULT_THEME_KEY])
+
+
+def build_theme_css(theme: Theme) -> str:
+    """Renders the full stylesheet for the given theme by substituting its
+    colour values into the shared, theme-agnostic design system template.
+    Uses plain marker-token replacement (not str.format) because the CSS
+    body legitimately contains literal `{` and `}` braces for its rules,
+    which would break Python's format-string substitution."""
+    css = DESIGN_SYSTEM_CSS_TEMPLATE
+    replacements = {
+        "__INK__": theme.ink,
+        "__INK_RAISED__": theme.ink_raised,
+        "__INK_BORDER__": theme.ink_border,
+        "__SIDEBAR_BG__": theme.sidebar_bg,
+        "__PARCHMENT__": theme.parchment,
+        "__PARCHMENT_DIM__": theme.parchment_dim,
+        "__ACCENT__": theme.accent,
+        "__ACCENT_BRIGHT__": theme.accent_bright,
+        "__ACCENT_TEXT__": theme.accent_text,
+        "__SLATE__": theme.slate,
+        "__BRICK__": theme.brick,
+        "__SAGE__": theme.sage,
+        "__WARNING__": theme.warning,
+        "__TRACK_BG__": theme.track_bg,
+    }
+    for marker, value in replacements.items():
+        css = css.replace(marker, value)
+    return css
+
+
+# ══════════════════════════════════════════════════════════════════════════
 # LAYER 12 — DESIGN SYSTEM (CSS)
 # ══════════════════════════════════════════════════════════════════════════
 # Design concept: the "official examination document," not "AI SaaS
@@ -1162,22 +1308,30 @@ st.set_page_config(
 # product blue. Serif display type for anything that resembles a band
 # score or headline; a clean grotesque for body and controls; a monospace
 # face for anything numeric and exam-like (timers, scores, word counts).
+#
+# The template below is theme-agnostic: every colour is a `{placeholder}`
+# filled in by build_theme_css() from the active Theme. Layout, spacing,
+# and typography never change between themes — only the palette does.
 
-DESIGN_SYSTEM_CSS = """
+DESIGN_SYSTEM_CSS_TEMPLATE = """
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Source+Serif+Pro:wght@600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500;600&display=swap');
 
 :root {
-    --ink: #0B0F14;
-    --ink-raised: #11161D;
-    --ink-border: #232B36;
-    --parchment: #F7F5F0;
-    --parchment-dim: #C9C6BC;
-    --gold: #C9A227;
-    --gold-bright: #E0BE4A;
-    --slate: #8A8775;
-    --brick: #9B4A3F;
-    --sage: #5E8C6A;
+    --ink: __INK__;
+    --ink-raised: __INK_RAISED__;
+    --ink-border: __INK_BORDER__;
+    --sidebar-bg: __SIDEBAR_BG__;
+    --parchment: __PARCHMENT__;
+    --parchment-dim: __PARCHMENT_DIM__;
+    --gold: __ACCENT__;
+    --gold-bright: __ACCENT_BRIGHT__;
+    --accent-text: __ACCENT_TEXT__;
+    --slate: __SLATE__;
+    --brick: __BRICK__;
+    --sage: __SAGE__;
+    --warning: __WARNING__;
+    --track-bg: __TRACK_BG__;
 }
 
 html, body, .stApp {
@@ -1228,7 +1382,7 @@ h1, h2, h3 {
 
 /* ---- Sidebar ---- */
 section[data-testid="stSidebar"] {
-    background-color: #080B0F;
+    background-color: var(--sidebar-bg);
     border-right: 1px solid var(--ink-border);
 }
 section[data-testid="stSidebar"] h2, section[data-testid="stSidebar"] h3 {
@@ -1244,7 +1398,7 @@ section[data-testid="stSidebar"] label, section[data-testid="stSidebar"] p {
     border-radius: 10px;
     padding: 0.6rem 1.5rem;
     background: var(--gold);
-    color: #16130A;
+    color: var(--accent-text);
     font-weight: 700;
     font-family: 'Inter', sans-serif;
     border: none;
@@ -1255,7 +1409,7 @@ section[data-testid="stSidebar"] label, section[data-testid="stSidebar"] p {
     transform: scale(1.025) translateY(-1px);
     background: var(--gold-bright);
     box-shadow: 0 5px 0 rgba(0,0,0,0.3);
-    color: #16130A;
+    color: var(--accent-text);
 }
 .stButton > button:active {
     transform: scale(0.98) translateY(0px);
@@ -1332,8 +1486,37 @@ div[data-testid="stMetricValue"] {
 }
 
 /* ---- Slider ---- */
+/* Streamlit's BaseWeb slider ships with a hardcoded red track by default;
+   every part below is re-themed so no theme ever shows stray red/grey. */
+.stSlider [data-baseweb="slider"] {
+    margin-top: 0.4rem;
+}
+.stSlider [data-baseweb="slider"] > div:first-child {
+    background: var(--ink-border) !important;  /* unfilled track */
+}
+.stSlider [data-baseweb="slider"] div[data-testid="stSliderTrackFill"],
+.stSlider [data-baseweb="slider"] > div > div:nth-child(2) {
+    background: var(--gold) !important;  /* filled portion of the track */
+}
 .stSlider [data-baseweb="slider"] div[role="slider"] {
     background-color: var(--gold) !important;
+    border-color: var(--gold) !important;
+    box-shadow: 0 0 0 4px rgba(0,0,0,0.15) !important;
+}
+.stSlider [data-baseweb="slider"] div[role="slider"]:focus {
+    box-shadow: 0 0 0 4px var(--gold-bright) !important;
+}
+.stSlider div[data-testid="stTickBarMin"],
+.stSlider div[data-testid="stTickBarMax"] {
+    color: var(--slate) !important;
+}
+.stSlider label {
+    color: var(--parchment) !important;
+}
+/* Floating value bubble shown above the thumb while dragging */
+.stSlider [data-baseweb="slider"] div[data-testid="stThumbValue"] {
+    color: var(--gold) !important;
+    font-family: 'JetBrains Mono', monospace !important;
 }
 
 /* ---- Cards ---- */
@@ -1371,7 +1554,7 @@ div[data-testid="stMetricValue"] {
 }
 .badge-gold { background: rgba(201,162,39,0.15); color: var(--gold-bright); border: 1px solid rgba(201,162,39,0.4); }
 .badge-sage { background: rgba(94,140,106,0.15); color: var(--sage); border: 1px solid rgba(94,140,106,0.4); }
-.badge-brick { background: rgba(155,74,63,0.15); color: #D98A7E; border: 1px solid rgba(155,74,63,0.4); }
+.badge-brick { background: rgba(155,74,63,0.15); color: var(--brick); border: 1px solid rgba(155,74,63,0.4); }
 
 /* ---- Streak / word-of-day chip ---- */
 .chip-row { display: flex; gap: 0.7rem; margin-bottom: 1rem; flex-wrap: wrap; }
@@ -1432,7 +1615,7 @@ hr { border-color: var(--ink-border) !important; }
     margin: 0.2rem 0 0.6rem 0;
 }
 .timer-display.timer-warning {
-    color: #F87171;
+    color: var(--warning);
     animation: timer-flash 1s infinite;
 }
 @keyframes timer-flash {
@@ -1444,13 +1627,13 @@ div[data-testid="stProgress"] div[role="progressbar"] > div {
     transition: width 0.3s ease, background-color 0.3s ease;
 }
 .timer-bar-warning div[data-testid="stProgress"] div[role="progressbar"] > div {
-    background-color: #F87171 !important;
+    background-color: var(--warning) !important;
     animation: timer-flash 1s infinite;
 }
 
 /* ---- Word-count goal bar ---- */
 .word-goal-track {
-    background: #1E1B14;
+    background: var(--track-bg);
     border-radius: 8px;
     height: 14px;
     overflow: hidden;
@@ -1479,18 +1662,21 @@ div[data-testid="stProgress"] div[role="progressbar"] > div {
 </style>
 """
 
-st.markdown(DESIGN_SYSTEM_CSS, unsafe_allow_html=True)
-
 
 # ══════════════════════════════════════════════════════════════════════════
 # LAYER 13 — BOOT SEQUENCE
 # ══════════════════════════════════════════════════════════════════════════
+# Session state must be initialised BEFORE the stylesheet is injected,
+# since the active theme (including any session-built Custom theme) lives
+# in st.session_state and the CSS below is generated per-theme.
 
 init_session_state()
 register_daily_visit()
 profile: StudentProfile = st.session_state.profile
 groq: GroqClient = st.session_state.groq_client
 groq_whisper: GroqWhisperClient = st.session_state.groq_whisper_client
+
+st.markdown(build_theme_css(get_active_theme()), unsafe_allow_html=True)
 
 
 def severity_badge(band: float) -> str:
@@ -1556,6 +1742,49 @@ st.markdown(
 
 # ── Sidebar ───────────────────────────────────────────────────────────
 with st.sidebar:
+    st.markdown("## 🎨 Visual Theme")
+    theme_options = list(THEME_REGISTRY.keys()) + ["custom"]
+    theme_display = {k: f"{THEME_REGISTRY[k].emoji} {THEME_REGISTRY[k].name}" for k in THEME_REGISTRY}
+    theme_display["custom"] = "🛠️ Custom (build your own)"
+
+    selected_theme_key = st.selectbox(
+        "Choose a theme",
+        options=theme_options,
+        index=theme_options.index(st.session_state.theme_key) if st.session_state.theme_key in theme_options else 0,
+        format_func=lambda k: theme_display[k],
+        key="theme_picker_select",
+    )
+    if selected_theme_key != st.session_state.theme_key:
+        st.session_state.theme_key = selected_theme_key
+        st.rerun()
+
+    if st.session_state.theme_key == "custom":
+        st.caption("Pick your own palette — it applies instantly across every tab.")
+        base = st.session_state.custom_theme
+        c1, c2 = st.columns(2)
+        with c1:
+            picked_ink = st.color_picker("Background", value=base.ink, key="custom_ink")
+            picked_accent = st.color_picker("Accent", value=base.accent, key="custom_accent")
+            picked_text = st.color_picker("Text", value=base.parchment, key="custom_text")
+        with c2:
+            picked_raised = st.color_picker("Panels", value=base.ink_raised, key="custom_raised")
+            picked_border = st.color_picker("Borders", value=base.ink_border, key="custom_border")
+
+        # Recompute the rest of the palette from the picks so partial
+        # input (just bg + accent) still yields a coherent theme.
+        new_custom = Theme(
+            key="custom", name="Custom", emoji="🛠️",
+            ink=picked_ink, ink_raised=picked_raised, ink_border=picked_border,
+            sidebar_bg=picked_ink, parchment=picked_text, parchment_dim=base.parchment_dim,
+            accent=picked_accent, accent_bright=picked_accent, accent_text=picked_ink,
+            slate=base.slate, brick=base.brick, sage=base.sage,
+            warning=base.warning, track_bg=picked_raised,
+        )
+        if new_custom != st.session_state.custom_theme:
+            st.session_state.custom_theme = new_custom
+            st.rerun()
+
+    st.markdown("---")
     st.markdown("## 🪪 Candidate Profile")
     profile.name = st.text_input("Name", value=profile.name)
     profile.native_language = st.selectbox(
@@ -1635,7 +1864,7 @@ with st.sidebar:
     st.caption("Click any past attempt to instantly reload its score and feedback — no API call, no re-grading.")
     if not st.session_state.essay_history_log:
         st.markdown(
-            '<div style="font-size:0.82rem; color:#8A8775;">No graded essays yet this visit. '
+            '<div style="font-size:0.82rem; color:var(--slate);">No graded essays yet this visit. '
             "Submit one in Writing Evaluation and it will appear here.</div>",
             unsafe_allow_html=True,
         )
@@ -1659,7 +1888,7 @@ with st.sidebar:
         )
     else:
         st.markdown(
-            '<div style="font-size:0.82rem; color:#8A8775;">Submit your first essay or speaking '
+            '<div style="font-size:0.82rem; color:var(--slate);">Submit your first essay or speaking '
             "response to start building your mistake fingerprint.</div>",
             unsafe_allow_html=True,
         )
@@ -1667,7 +1896,7 @@ with st.sidebar:
     st.markdown("---")
     st.markdown(
         f"""
-        <div style="font-size: 0.72rem; color: #8A8775; font-family: 'JetBrains Mono', monospace;">
+        <div style="font-size: 0.72rem; color: var(--slate); font-family: 'JetBrains Mono', monospace;">
             MODEL: {GROQ_CHAT_MODEL}<br>
             MODE: STRICT EXAMINER<br>
             STATUS: {"● GROQ GRADING CONNECTED" if groq.is_configured else "○ GROQ KEY NOT SET"}<br>
@@ -1797,7 +2026,8 @@ with tab_writing:
             st.session_state.last_writing_submission.score.overall
             if st.session_state.last_writing_submission else 0.0
         )
-        st.markdown(render_band_certificate_svg(cert_score, profile), unsafe_allow_html=True)
+        active_theme = get_active_theme()
+        st.markdown(render_band_certificate_svg(cert_score, profile, accent_color=active_theme.accent), unsafe_allow_html=True)
 
     if st.session_state.last_writing_submission:
         result = st.session_state.last_writing_submission
@@ -1817,7 +2047,15 @@ with tab_writing:
         col_radar, col_feedback = st.columns([1, 1.3], gap="large")
         with col_radar:
             st.markdown('<div class="section-eyebrow">Skill radar</div>', unsafe_allow_html=True)
-            st.markdown(render_skill_radar_svg(result.score), unsafe_allow_html=True)
+            st.markdown(
+                render_skill_radar_svg(
+                    result.score,
+                    accent_color=active_theme.accent,
+                    text_color=active_theme.parchment,
+                    grid_color=active_theme.ink_border,
+                ),
+                unsafe_allow_html=True,
+            )
         with col_feedback:
             st.markdown(
                 f"""
@@ -1915,7 +2153,7 @@ with tab_speaking:
             f"""
             <div class="doc-card" style="margin-bottom:0.8rem;">
                 <h4>{active_prompt.part} · {html.escape(active_prompt.topic)}</h4>
-                <div class="doc-card-body" style="font-size:1.05rem; color:#F7F5F0;">
+                <div class="doc-card-body" style="font-size:1.05rem; color:var(--parchment);">
                     {html.escape(active_prompt.prompt)}
                 </div>
             </div>
@@ -2011,7 +2249,7 @@ with tab_speaking:
             <div class="doc-card">
                 <h4>Examiner feedback</h4>
                 <div class="doc-card-body">{render_markdown_body(sp.feedback)}</div>
-                <p style="margin-top:1rem; font-size:0.82rem; color:#8A8775; font-style:italic;">
+                <p style="margin-top:1rem; font-size:0.82rem; color:var(--slate); font-style:italic;">
                     🔊 Pronunciation note: {html.escape(sp.pronunciation_note) if sp.pronunciation_note else "Not available from text alone."}
                 </p>
             </div>
@@ -2041,10 +2279,10 @@ with tab_vocab:
                 f"""
                 <div class="doc-card" style="padding:1.0rem 1.2rem; margin-bottom:0.7rem;">
                     <div style="display:flex; justify-content:space-between; align-items:baseline;">
-                        <span style="font-family:'Source Serif Pro', serif; font-size:1.1rem; font-weight:700; color:#F7F5F0;">{html.escape(vocab.word)}</span>
+                        <span style="font-family:'Source Serif Pro', serif; font-size:1.1rem; font-weight:700; color:var(--parchment);">{html.escape(vocab.word)}</span>
                         <span class="badge badge-gold">{html.escape(vocab.band_level)}</span>
                     </div>
-                    <p style="color:#8A8775; font-size:0.85rem; margin:0.4rem 0 0.3rem 0;">{html.escape(vocab.definition)}</p>
+                    <p style="color:var(--slate); font-size:0.85rem; margin:0.4rem 0 0.3rem 0;">{html.escape(vocab.definition)}</p>
                     <p style="color:#C9C6BC; font-size:0.85rem; font-style:italic; margin:0;">"{html.escape(vocab.example)}"</p>
                 </div>
                 """,
@@ -2093,8 +2331,8 @@ with tab_fingerprint:
                     the examiner found. This tab accumulates those tags across every
                     submission in your session and compares your earlier attempts to
                     your most recent ones — so a category trending toward
-                    <b style="color:#4ADE80;">improving</b> means you're actively fixing
-                    it, while <b style="color:#F87171;">worsening</b> flags something
+                    <b style="color:var(--sage);">improving</b> means you're actively fixing
+                    it, while <b style="color:var(--warning);">worsening</b> flags something
                     new creeping in.
                 </div>
             </div>
@@ -2138,7 +2376,7 @@ with tab_history:
                 f"""
                 <div class="history-row">
                     <div>
-                        <div style="font-weight:600; color:#F7F5F0;">{icon} {module} — {html.escape(label)}</div>
+                        <div style="font-weight:600; color:var(--parchment);">{icon} {module} — {html.escape(label)}</div>
                         <div class="history-meta">{html.escape(timestamp)}</div>
                     </div>
                     <div class="history-score">{band:.1f}</div>
@@ -2198,17 +2436,31 @@ with tab_calculator:
 
     with calc_col_dial:
         overall_estimate = overall_band_from_four(listening_score, reading_score, writing_band_input, speaking_band_input)
+        active_theme = get_active_theme()
         st.markdown('<div class="score-dial-wrap">', unsafe_allow_html=True)
-        st.markdown(render_band_dial_svg(overall_estimate, label="ESTIMATED OVERALL BAND"), unsafe_allow_html=True)
+        st.markdown(
+            render_band_dial_svg(
+                overall_estimate,
+                label="ESTIMATED OVERALL BAND",
+                track_color=active_theme.ink_border,
+                needle_color=active_theme.accent,
+                text_color=active_theme.parchment,
+                sub_color=active_theme.slate,
+                low_color=active_theme.brick,
+                mid_color=active_theme.accent,
+                high_color=active_theme.sage,
+            ),
+            unsafe_allow_html=True,
+        )
         st.markdown("</div>", unsafe_allow_html=True)
         st.markdown(
             f"""
             <div class="doc-card" style="text-align:center;">
                 <div class="doc-card-body" style="font-size:0.85rem;">
-                    Listening <b style="color:#F7F5F0;">{listening_score:.1f}</b> ·
-                    Reading <b style="color:#F7F5F0;">{reading_score:.1f}</b> ·
-                    Writing <b style="color:#F7F5F0;">{writing_band_input:.1f}</b> ·
-                    Speaking <b style="color:#F7F5F0;">{speaking_band_input:.1f}</b>
+                    Listening <b style="color:var(--parchment);">{listening_score:.1f}</b> ·
+                    Reading <b style="color:var(--parchment);">{reading_score:.1f}</b> ·
+                    Writing <b style="color:var(--parchment);">{writing_band_input:.1f}</b> ·
+                    Speaking <b style="color:var(--parchment);">{speaking_band_input:.1f}</b>
                 </div>
             </div>
             """,
@@ -2229,7 +2481,7 @@ with tab_about:
             <div class="doc-card">
                 <h4>About this platform</h4>
                 <div class="doc-card-body">
-                    <p><b style="color:#F7F5F0;">IELTS AI Tutor</b> exists because real examiner feedback is
+                    <p><b style="color:var(--parchment);">IELTS AI Tutor</b> exists because real examiner feedback is
                     expensive, slow, and usually capped at one or two mock essays before a test date. This
                     platform gives students unlimited, examiner-grade feedback against the actual IELTS band
                     descriptors — for free, in their own language, available at 2am the night before an exam.</p>
@@ -2268,7 +2520,7 @@ with tab_about:
             <div class="doc-card">
                 <h4>Builder</h4>
                 <div class="doc-card-body">
-                    <p style="font-size:1.05rem; font-weight:700; color:#F7F5F0; margin-bottom:0.2rem;">Atif Al Azad</p>
+                    <p style="font-size:1.05rem; font-weight:700; color:var(--parchment); margin-bottom:0.2rem;">Atif Al Azad</p>
                     <p style="color:var(--gold); font-size:0.85rem; margin-bottom:0.9rem;">
                         Grade 11 STEM Student (PCM-CS) · DPS Modern Indian School, Doha, Qatar
                     </p>
@@ -2289,11 +2541,11 @@ with tab_about:
             <div class="doc-card">
                 <h4>Background</h4>
                 <div class="doc-card-body" style="font-size:0.88rem;">
-                    <p><b style="color:#F7F5F0;">Skills:</b> Python, JavaScript, OOP, algorithm design,
+                    <p><b style="color:var(--parchment);">Skills:</b> Python, JavaScript, OOP, algorithm design,
                     system architecture, data analysis, technical writing.</p>
-                    <p><b style="color:#F7F5F0;">Languages:</b> English (99%), French (98%), Bangla, Hindi,
+                    <p><b style="color:var(--parchment);">Languages:</b> English (99%), French (98%), Bangla, Hindi,
                     and Urdu — native or near-native across all five.</p>
-                    <p><b style="color:#F7F5F0;">Active in:</b> Science Club and Mathematics Club at
+                    <p><b style="color:var(--parchment);">Active in:</b> Science Club and Mathematics Club at
                     DPS-Modern Indian School; volunteered 10 hours at the Qatar Educational Leadership
                     Expo 2026 coordinating registration and exhibitor logistics.</p>
                 </div>
