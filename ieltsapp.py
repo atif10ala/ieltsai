@@ -91,6 +91,21 @@ BAND_EXCELLENT = 7.5
 BAND_GOOD = 6.5
 BAND_DEVELOPING = 5.5
 
+# Exam timer presets, in seconds, keyed by the task the student selects in
+# the Interactive Exam Timer module. Sourced from the real IELTS time
+# allowance per task.
+TIMER_PRESETS_SECONDS: dict[str, int] = {
+    "Task 1 (20 Minutes)": 20 * 60,
+    "Task 2 (40 Minutes)": 40 * 60,
+}
+TIMER_WARNING_THRESHOLD_SECONDS: int = 5 * 60  # flash red under 5 minutes
+
+# Word-count goals per task, used by the Dynamic Word Count Goal Bar.
+WORD_GOALS: dict[str, int] = {
+    "Task 1 (20 Minutes)": 150,
+    "Task 2 (40 Minutes)": 250,
+}
+
 
 # ══════════════════════════════════════════════════════════════════════════
 # LAYER 2 — DOMAIN MODELS
@@ -472,6 +487,21 @@ limited_vocabulary_range, word_order. List only categories genuinely present.
 All band scores must be valid IELTS bands in 0.5 increments."""
 
 
+REWRITE_TO_BAND9_PROMPT = """You are an expert IELTS Writing tutor. You will receive a candidate's original \
+essay, the IELTS Task Type, and the essay topic/prompt. Your job is NOT to grade it — it is to rewrite \
+it into a polished, natural-sounding Band 9.0 sample answer that keeps the candidate's own ideas, \
+opinions, examples, and overall argument structure, but expresses them with the range of grammar, \
+precise vocabulary, and cohesive flow expected at the top band.
+
+Rules:
+- Preserve the candidate's actual stance, examples, and the order of their main points — this is a \
+polish, not a different essay.
+- Fix every grammar, vocabulary, and cohesion issue silently as you rewrite.
+- Keep the length comparable to the original (do not pad it dramatically longer).
+- Respond with ONLY the rewritten essay text. No preamble, no headings, no markdown, no commentary, \
+no "Here is the rewritten essay" framing — just the essay itself."""
+
+
 MISTAKE_LABELS: dict[str, str] = {
     "article_error": "Articles (a / an / the)",
     "tense_error": "Verb tense consistency",
@@ -586,6 +616,40 @@ WORD_OF_THE_DAY_BANK: tuple[VocabWord, ...] = (
     VocabWord("Ambiguous", "Open to more than one interpretation; unclear", "The wording of the question was ambiguous.", "Band 7+"),
     VocabWord("Consensus", "A general agreement among a group", "There is a growing consensus among scientists on this issue.", "Band 7+"),
     VocabWord("Paramount", "More important than anything else; supreme", "Safety is of paramount importance in this industry.", "Band 8+"),
+)
+
+
+@dataclass(frozen=True)
+class WritingPrompt:
+    """A single hardcoded IELTS Task 2-style essay prompt for the Prompt Generator Engine."""
+
+    category: str
+    prompt: str
+
+
+# Hardcoded prompt bank for the "Surprise Me" generator — at least 15 real,
+# exam-realistic Task 2 prompts spread across the categories IELTS actually
+# draws from. No API call needed to populate this; it's instant and free.
+WRITING_PROMPT_BANK: tuple[WritingPrompt, ...] = (
+    WritingPrompt("Global Environment", "Some people believe that environmental problems are too big for individual countries to solve, and that they can only be solved by international cooperation. To what extent do you agree or disagree?"),
+    WritingPrompt("Global Environment", "Many governments think that economic development is the most important factor for a country, while others think protecting the environment is more important. Discuss both views and give your own opinion."),
+    WritingPrompt("Global Environment", "Plastic bags and packaging contribute significantly to environmental pollution. What problems does this cause and what measures could be taken to address it?"),
+    WritingPrompt("Automation & AI", "Artificial intelligence is increasingly being used to make decisions that were previously made by humans, such as in hiring and medical diagnosis. Do the advantages of this outweigh the disadvantages?"),
+    WritingPrompt("Automation & AI", "In the future, robots and automated systems will replace most jobs currently done by humans. Do you agree or disagree with this statement?"),
+    WritingPrompt("Automation & AI", "Some people think that the increasing use of automation in the workplace will lead to widespread unemployment, while others believe it will create new types of jobs. Discuss both views and give your opinion."),
+    WritingPrompt("Public Education", "Some people believe that university education should be free for all students, while others think students should pay for their own tuition. Discuss both views and give your opinion."),
+    WritingPrompt("Public Education", "In many countries, children are required to study a foreign language from a very young age. Do the advantages of this outweigh the disadvantages?"),
+    WritingPrompt("Public Education", "Some educators argue that examinations are not an effective way to assess a student's abilities, and that alternative methods should be used. To what extent do you agree or disagree?"),
+    WritingPrompt("Urban Infrastructure", "As cities grow larger, many people are choosing to live in high-rise apartment buildings rather than houses with gardens. What are the advantages and disadvantages of this trend?"),
+    WritingPrompt("Urban Infrastructure", "Traffic congestion is becoming an increasingly serious problem in many major cities around the world. What are the causes of this problem and what solutions can you suggest?"),
+    WritingPrompt("Urban Infrastructure", "Some city planners argue that public transport should be free for all residents in order to reduce traffic and pollution. To what extent do you agree or disagree?"),
+    WritingPrompt("Health & Lifestyle", "In many countries, obesity rates are rising rapidly among both children and adults. What are the causes of this trend and what measures could be taken to address it?"),
+    WritingPrompt("Health & Lifestyle", "Some people believe that the best way to improve public health is to invest more in sports facilities, while others believe investing in healthcare and medicine is more effective. Discuss both views and give your own opinion."),
+    WritingPrompt("Technology & Society", "The widespread use of smartphones and social media has changed the way people communicate with one another. Do the advantages of this development outweigh the disadvantages?"),
+    WritingPrompt("Technology & Society", "Some people think that the internet has made it easier for people to access accurate information, while others believe it has increased the spread of misinformation. Discuss both views and give your own opinion."),
+    WritingPrompt("Crime & Society", "Some people believe that the most effective way to reduce crime is to impose tougher prison sentences, while others believe addressing the root causes of crime is more effective. Discuss both views and give your opinion."),
+    WritingPrompt("Work & Career", "Many people believe that a good salary is more important than job satisfaction when choosing a career. To what extent do you agree or disagree?"),
+    WritingPrompt("Work & Career", "In some countries, employees are required to retire at a fixed age, while in others there is no fixed retirement age. Discuss both approaches and give your own opinion."),
 )
 
 
@@ -718,6 +782,61 @@ class ErrorFingerprintEngine:
 
 
 # ══════════════════════════════════════════════════════════════════════════
+# LAYER 8B — BAND SCORE CALCULATOR (PURE-CODE, NO API CALL)
+# ══════════════════════════════════════════════════════════════════════════
+# Maps raw Listening/Reading correct-answer counts onto official IELTS band
+# scores using the published Academic conversion tables. This is deliberately
+# zero-AI: it's arithmetic against a lookup table, so it's instant, free,
+# and works even with no Groq key configured at all — useful as a standalone
+# diagnostic students can use before they've written a single word.
+
+def listening_band(correct: int) -> float:
+    """Converts a raw Listening score (0-40) into an IELTS band, per the
+    official Academic/General Listening conversion table."""
+    correct = max(0, min(40, correct))
+    thresholds = [
+        (39, 9.0), (37, 8.5), (35, 8.0), (32, 7.5), (30, 7.0),
+        (26, 6.5), (23, 6.0), (18, 5.5), (16, 5.0), (13, 4.5),
+        (10, 4.0), (8, 3.5), (6, 3.0), (4, 2.5),
+    ]
+    for cutoff, band in thresholds:
+        if correct >= cutoff:
+            return band
+    return 2.0
+
+
+def reading_band_academic(correct: int) -> float:
+    """Converts a raw Reading score (0-40) into an IELTS Academic Reading
+    band, per the official conversion table (Academic Reading is marked
+    slightly more strictly than Listening at the high end)."""
+    correct = max(0, min(40, correct))
+    thresholds = [
+        (39, 9.0), (37, 8.5), (35, 8.0), (33, 7.5), (30, 7.0),
+        (27, 6.5), (23, 6.0), (19, 5.5), (15, 5.0), (13, 4.5),
+        (10, 4.0), (8, 3.5), (6, 3.0), (4, 2.5),
+    ]
+    for cutoff, band in thresholds:
+        if correct >= cutoff:
+            return band
+    return 2.0
+
+
+def overall_band_from_four(listening: float, reading: float, writing: float, speaking: float) -> float:
+    """
+    Averages the four component bands and rounds to the nearest 0.5 using
+    IELTS's official rounding rule: a mean ending in .25 rounds UP to the
+    next .5, and a mean ending in .75 rounds UP to the next whole band.
+    """
+    mean = (listening + reading + writing + speaking) / 4
+    remainder = mean - int(mean)
+    if abs(remainder - 0.25) < 1e-9:
+        return int(mean) + 0.5
+    if abs(remainder - 0.75) < 1e-9:
+        return int(mean) + 1.0
+    return round(mean * 2) / 2
+
+
+# ══════════════════════════════════════════════════════════════════════════
 # LAYER 9 — SESSION STATE (APPLICATION STATE MANAGEMENT)
 # ══════════════════════════════════════════════════════════════════════════
 # Streamlit's session_state is our in-memory substitute for a real session
@@ -741,6 +860,30 @@ def init_session_state() -> None:
     if "last_speaking_submission" not in st.session_state:
         st.session_state.last_speaking_submission = None
 
+    # --- Exam Timer state ---
+    if "timer_preset" not in st.session_state:
+        st.session_state.timer_preset = "Task 2 (40 Minutes)"
+    if "timer_remaining_seconds" not in st.session_state:
+        st.session_state.timer_remaining_seconds = TIMER_PRESETS_SECONDS[st.session_state.timer_preset]
+    if "timer_running" not in st.session_state:
+        st.session_state.timer_running = False
+    if "timer_last_tick" not in st.session_state:
+        st.session_state.timer_last_tick = None
+
+    # --- Prompt Generator state ---
+    if "generated_prompt_text" not in st.session_state:
+        st.session_state.generated_prompt_text = ""
+
+    # --- Band 9 rewrite (side-by-side comparison) cache ---
+    if "band9_rewrite" not in st.session_state:
+        st.session_state.band9_rewrite = None
+
+    # --- Session history log (full essay + feedback snapshots) ---
+    if "essay_history_log" not in st.session_state:
+        st.session_state.essay_history_log = []
+    if "selected_history_index" not in st.session_state:
+        st.session_state.selected_history_index = None
+
 
 def register_daily_visit() -> None:
     """
@@ -757,6 +900,31 @@ def register_daily_visit() -> None:
     yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
     profile.streak_days = profile.streak_days + 1 if profile.last_active_date == yesterday else 1
     profile.last_active_date = today
+
+
+def tick_exam_timer() -> None:
+    """
+    Advances the exam timer based on real elapsed wall-clock time since the
+    last rerun, rather than a naive per-rerun decrement — this keeps the
+    countdown accurate regardless of Streamlit's rerun frequency.
+    """
+    if not st.session_state.timer_running:
+        return
+    now = datetime.now()
+    last_tick = st.session_state.timer_last_tick
+    if last_tick is not None:
+        elapsed = (now - last_tick).total_seconds()
+        st.session_state.timer_remaining_seconds = max(0, st.session_state.timer_remaining_seconds - elapsed)
+        if st.session_state.timer_remaining_seconds <= 0:
+            st.session_state.timer_running = False
+    st.session_state.timer_last_tick = now
+
+
+def format_mm_ss(total_seconds: float) -> str:
+    """Formats a float seconds count as MM:SS for the timer display."""
+    total_seconds = max(0, int(total_seconds))
+    minutes, seconds = divmod(total_seconds, 60)
+    return f"{minutes:02d}:{seconds:02d}"
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -837,6 +1005,63 @@ def _cos(angle: float) -> float:
 def _sin(angle: float) -> float:
     import math
     return math.sin(angle)
+
+
+def render_band_dial_svg(band: float, label: str = "OVERALL BAND", size: int = 260) -> str:
+    """
+    Renders a half-circle dial gauge (0-9 IELTS scale) as raw SVG, with a
+    needle pointing at the live band score. Used by the standalone Band
+    Score Calculator tab for instant, no-API, pure-math visual feedback.
+    """
+    import math as _math
+
+    cx, cy = size / 2, size * 0.58
+    radius = size * 0.40
+    max_band = 9.0
+    band_clamped = max(0.0, min(max_band, band))
+
+    start_angle = _math.pi  # 180°, left side
+    end_angle = 0.0  # 0°, right side
+    frac = band_clamped / max_band
+    angle = start_angle - frac * (start_angle - end_angle)
+
+    def arc_point(a: float, r: float) -> tuple[float, float]:
+        return cx + r * _math.cos(a), cy - r * _math.sin(a)
+
+    # Colour-graded ticks: brick (low) -> gold (mid) -> sage (high)
+    tick_colors = ["#9B4A3F", "#9B4A3F", "#C9A227", "#C9A227", "#C9A227", "#5E8C6A", "#5E8C6A", "#5E8C6A", "#5E8C6A"]
+    ticks_svg = ""
+    for i in range(10):
+        a = start_angle - (i / 9) * (start_angle - end_angle)
+        x1, y1 = arc_point(a, radius + 6)
+        x2, y2 = arc_point(a, radius - 6)
+        color = tick_colors[min(i, len(tick_colors) - 1)]
+        ticks_svg += f'<line x1="{x1:.1f}" y1="{y1:.1f}" x2="{x2:.1f}" y2="{y2:.1f}" stroke="{color}" stroke-width="3"/>'
+
+    arc_segments = 48
+    arc_path_parts = []
+    for i in range(arc_segments + 1):
+        a = start_angle - (i / arc_segments) * (start_angle - end_angle)
+        x, y = arc_point(a, radius)
+        arc_path_parts.append(f"{x:.1f},{y:.1f}")
+    track_points = " ".join(arc_path_parts)
+
+    needle_x, needle_y = arc_point(angle, radius - 14)
+
+    return f"""
+    <svg viewBox="0 0 {size} {size * 0.66:.0f}" width="100%" role="img"
+         aria-label="Dial gauge showing the calculated IELTS band score">
+        <polyline points="{track_points}" fill="none" stroke="#232B36" stroke-width="10" stroke-linecap="round"/>
+        {ticks_svg}
+        <line x1="{cx:.1f}" y1="{cy:.1f}" x2="{needle_x:.1f}" y2="{needle_y:.1f}"
+              stroke="#C9A227" stroke-width="4" stroke-linecap="round"/>
+        <circle cx="{cx:.1f}" cy="{cy:.1f}" r="7" fill="#C9A227"/>
+        <text x="{cx:.1f}" y="{cy + 38:.1f}" text-anchor="middle" font-family="'Source Serif Pro', Georgia, serif"
+              font-size="40" font-weight="700" fill="#F7F5F0">{band_clamped:.1f}</text>
+        <text x="{cx:.1f}" y="{cy + 58:.1f}" text-anchor="middle" font-family="Inter, sans-serif"
+              font-size="10" letter-spacing="1.5" fill="#8A8775">{html.escape(label)}</text>
+    </svg>
+    """
 
 
 def render_band_certificate_svg(overall: float, profile: StudentProfile) -> str:
@@ -1195,6 +1420,62 @@ hr { border-color: var(--ink-border) !important; }
     color: var(--gold);
     margin-bottom: 0.5rem;
 }
+
+/* ---- Exam timer ---- */
+.timer-display {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 2.6rem;
+    font-weight: 700;
+    text-align: center;
+    color: var(--parchment);
+    letter-spacing: 0.02em;
+    margin: 0.2rem 0 0.6rem 0;
+}
+.timer-display.timer-warning {
+    color: #F87171;
+    animation: timer-flash 1s infinite;
+}
+@keyframes timer-flash {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.35; }
+}
+div[data-testid="stProgress"] div[role="progressbar"] > div {
+    background-color: var(--gold) !important;
+    transition: width 0.3s ease, background-color 0.3s ease;
+}
+.timer-bar-warning div[data-testid="stProgress"] div[role="progressbar"] > div {
+    background-color: #F87171 !important;
+    animation: timer-flash 1s infinite;
+}
+
+/* ---- Word-count goal bar ---- */
+.word-goal-track {
+    background: #1E1B14;
+    border-radius: 8px;
+    height: 14px;
+    overflow: hidden;
+    border: 1px solid var(--ink-border);
+    margin-top: 0.4rem;
+}
+.word-goal-fill {
+    height: 100%;
+    border-radius: 8px;
+    transition: width 0.25s ease, background 0.25s ease;
+}
+.word-goal-label {
+    display: flex;
+    justify-content: space-between;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.78rem;
+    color: var(--parchment-dim);
+    margin-top: 0.35rem;
+}
+
+/* ---- Score dial (calculator tab) ---- */
+.score-dial-wrap { text-align: center; padding: 0.6rem 0 0.2rem 0; }
+
+/* ---- Clickable session-history sidebar buttons ---- */
+.stButton > button.history-pill { font-size: 0.78rem !important; }
 </style>
 """
 
@@ -1292,6 +1573,83 @@ with st.sidebar:
     )
 
     st.markdown("---")
+    st.markdown("## ⏱️ Exam Timer")
+    new_preset = st.selectbox(
+        "Timer preset",
+        options=list(TIMER_PRESETS_SECONDS.keys()),
+        index=list(TIMER_PRESETS_SECONDS.keys()).index(st.session_state.timer_preset),
+        key="timer_preset_select",
+    )
+    if new_preset != st.session_state.timer_preset:
+        st.session_state.timer_preset = new_preset
+        st.session_state.timer_remaining_seconds = TIMER_PRESETS_SECONDS[new_preset]
+        st.session_state.timer_running = False
+        st.session_state.timer_last_tick = None
+
+    tick_exam_timer()
+    remaining = st.session_state.timer_remaining_seconds
+    total_for_preset = TIMER_PRESETS_SECONDS[st.session_state.timer_preset]
+    is_warning = remaining > 0 and remaining <= TIMER_WARNING_THRESHOLD_SECONDS
+    progress_frac = remaining / total_for_preset if total_for_preset else 0.0
+
+    timer_class = "timer-display timer-warning" if is_warning else "timer-display"
+    st.markdown(f'<div class="{timer_class}">{format_mm_ss(remaining)}</div>', unsafe_allow_html=True)
+
+    bar_wrap_class = "timer-bar-warning" if is_warning else ""
+    st.markdown(f'<div class="{bar_wrap_class}">', unsafe_allow_html=True)
+    st.progress(progress_frac)
+    st.markdown("</div>", unsafe_allow_html=True)
+
+    if remaining <= 0 and not st.session_state.timer_running and total_for_preset:
+        st.error("⏰ Time's up! Wrap up your answer.")
+
+    tcol1, tcol2, tcol3 = st.columns(3)
+    with tcol1:
+        if st.button("▶ Start", use_container_width=True, key="timer_start"):
+            if st.session_state.timer_remaining_seconds <= 0:
+                st.session_state.timer_remaining_seconds = total_for_preset
+            st.session_state.timer_running = True
+            st.session_state.timer_last_tick = datetime.now()
+            st.rerun()
+    with tcol2:
+        if st.button("⏸ Pause", use_container_width=True, key="timer_pause"):
+            tick_exam_timer()
+            st.session_state.timer_running = False
+            st.rerun()
+    with tcol3:
+        if st.button("↺ Reset", use_container_width=True, key="timer_reset"):
+            st.session_state.timer_remaining_seconds = total_for_preset
+            st.session_state.timer_running = False
+            st.session_state.timer_last_tick = None
+            st.rerun()
+
+    if st.session_state.timer_running:
+        st.caption("⏳ Timer running — the display refreshes automatically every second.")
+        st.markdown(
+            '<meta http-equiv="refresh" content="1">',
+            unsafe_allow_html=True,
+        )
+
+    st.markdown("---")
+    st.markdown("## 🗂️ Current Session History")
+    st.caption("Click any past attempt to instantly reload its score and feedback — no API call, no re-grading.")
+    if not st.session_state.essay_history_log:
+        st.markdown(
+            '<div style="font-size:0.82rem; color:#8A8775;">No graded essays yet this visit. '
+            "Submit one in Writing Evaluation and it will appear here.</div>",
+            unsafe_allow_html=True,
+        )
+    else:
+        for idx, entry in enumerate(reversed(st.session_state.essay_history_log)):
+            real_idx = len(st.session_state.essay_history_log) - 1 - idx
+            label = f"Band {entry['submission'].score.overall:.1f} · {entry['submission'].task_type} · {entry['submission'].timestamp}"
+            if st.button(label, key=f"history_pill_{real_idx}", use_container_width=True):
+                st.session_state.selected_history_index = real_idx
+                st.session_state.last_writing_submission = entry["submission"]
+                st.session_state.band9_rewrite = entry.get("band9_rewrite")
+                st.rerun()
+
+    st.markdown("---")
     st.markdown("## 🧬 Error Fingerprint")
     top_issue = ErrorFingerprintEngine.focus_recommendation(profile)
     if top_issue:
@@ -1324,13 +1682,15 @@ with st.sidebar:
 # LAYER 14 — MAIN TAB LAYOUT
 # ══════════════════════════════════════════════════════════════════════════
 
-tab_writing, tab_speaking, tab_vocab, tab_fingerprint, tab_history = st.tabs(
+tab_writing, tab_speaking, tab_vocab, tab_fingerprint, tab_history, tab_calculator, tab_about = st.tabs(
     [
         "📝 Writing Evaluation",
         "🗣️ Speaking Simulator",
         "💡 Vocabulary Upgrades",
         "🧬 Error Fingerprint",
         "📊 Progress History",
+        "🎛️ Score Calculator",
+        "👤 About",
     ]
 )
 
@@ -1339,6 +1699,26 @@ tab_writing, tab_speaking, tab_vocab, tab_fingerprint, tab_history = st.tabs(
 # TAB 1 — WRITING EVALUATION
 # ──────────────────────────────────────────────────────────────────────────
 with tab_writing:
+    # ── Prompt Generator Engine ─────────────────────────────────────────
+    gen_col1, gen_col2 = st.columns([4, 1.4])
+    with gen_col1:
+        st.markdown('<div class="section-eyebrow">Essay topic / prompt</div>', unsafe_allow_html=True)
+        topic_text = st.text_area(
+            "Essay topic",
+            value=st.session_state.generated_prompt_text,
+            height=70,
+            placeholder="Paste a prompt here, or click Surprise Me to generate one instantly →",
+            label_visibility="collapsed",
+            key="topic_text_input",
+        )
+        st.session_state.generated_prompt_text = topic_text
+    with gen_col2:
+        st.markdown('<div class="section-eyebrow">&nbsp;</div>', unsafe_allow_html=True)
+        if st.button("🎲 Surprise Me", use_container_width=True, key="surprise_me_prompt"):
+            choice = random.choice(WRITING_PROMPT_BANK)
+            st.session_state.generated_prompt_text = f"[{choice.category}] {choice.prompt}"
+            st.rerun()
+
     col_input, col_cert = st.columns([1.4, 1], gap="large")
 
     with col_input:
@@ -1351,15 +1731,33 @@ with tab_writing:
             key="essay_text_input",
         )
         word_count = len(essay_text.split()) if essay_text else 0
-        btn_col, count_col = st.columns([1, 2])
-        with btn_col:
-            analyze_clicked = st.button("🚀 Submit for grading", use_container_width=True, key="analyze_writing")
-        with count_col:
-            st.markdown(
-                f"<div style='padding-top:0.55rem; color:#8A8775; font-family:JetBrains Mono, monospace; "
-                f"font-size:0.85rem;'>{word_count} words</div>",
-                unsafe_allow_html=True,
-            )
+
+        # ── Dynamic Word Count Goal Bar ─────────────────────────────────
+        word_goal = WORD_GOALS.get(st.session_state.timer_preset, 250)
+        goal_frac = min(1.4, word_count / word_goal) if word_goal else 0.0
+        goal_pct_of_target = (word_count / word_goal * 100) if word_goal else 0.0
+        if goal_pct_of_target >= 100:
+            bar_color, status_label = "#34D399", "Goal met ✓"
+        elif goal_pct_of_target >= 50:
+            bar_color, status_label = "#F59E0B", "Getting there"
+        else:
+            bar_color, status_label = "#DC2626", "Keep writing"
+        fill_width = min(100, goal_frac * 100)
+        st.markdown(
+            f"""
+            <div class="word-goal-track">
+                <div class="word-goal-fill" style="width:{fill_width:.1f}%; background:{bar_color};"></div>
+            </div>
+            <div class="word-goal-label">
+                <span>{word_count} / {word_goal} words</span>
+                <span style="color:{bar_color}; font-weight:700;">{status_label}</span>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+        st.markdown("<div style='height:0.6rem;'></div>", unsafe_allow_html=True)
+        analyze_clicked = st.button("🚀 Submit for grading", use_container_width=True, key="analyze_writing")
 
         if analyze_clicked:
             if not essay_text or not essay_text.strip():
@@ -1379,6 +1777,16 @@ with tab_writing:
                         profile.writing_history.append(submission)
                         ErrorFingerprintEngine.record(profile, submission.mistakes)
                         st.session_state.last_writing_submission = submission
+                        st.session_state.band9_rewrite = None  # clear stale rewrite from a previous essay
+
+                        # Log into the Current Session History (Browser Cache History System)
+                        st.session_state.essay_history_log.append({
+                            "submission": submission,
+                            "essay_text": essay_text,
+                            "band9_rewrite": None,
+                        })
+                        st.session_state.selected_history_index = len(st.session_state.essay_history_log) - 1
+
                         st.success("✅ Evaluation complete — see your scorecard.")
                     except (GroqAPIError, GroqParsingError) as exc:
                         st.error(f"❌ Evaluation failed: {exc}")
@@ -1420,6 +1828,73 @@ with tab_writing:
                 """,
                 unsafe_allow_html=True,
             )
+
+        # ── Side-by-Side Visual Comparison (Re-Write View) ──────────────
+        st.markdown("---")
+        st.markdown('<div class="section-eyebrow">Band 9 re-write comparison</div>', unsafe_allow_html=True)
+        st.caption("See your original essay polished into a Band 9.0 sample, keeping your own ideas and structure.")
+
+        gen_rewrite_clicked = st.button(
+            "✨ Generate Band 9 Sample Version", key="generate_band9_rewrite", use_container_width=False
+        )
+        if gen_rewrite_clicked:
+            if not groq.is_configured:
+                st.error("🔑 No Groq API key configured. Set GROQ_API_KEY in .streamlit/secrets.toml.")
+            else:
+                source_essay = essay_text if essay_text and essay_text.strip() else None
+                if not source_essay and st.session_state.selected_history_index is not None:
+                    idx = st.session_state.selected_history_index
+                    if 0 <= idx < len(st.session_state.essay_history_log):
+                        source_essay = st.session_state.essay_history_log[idx]["essay_text"]
+                if not source_essay:
+                    st.warning("⚠️ No essay text available to rewrite — paste or reload an essay first.")
+                else:
+                    with st.spinner("✍️ Rewriting your essay to Band 9.0 standard..."):
+                        try:
+                            rewrite_user_prompt = (
+                                f"IELTS Task Type: {result.task_type}\n"
+                                f"Essay topic/prompt: {st.session_state.generated_prompt_text or '(not specified)'}\n\n"
+                                f"Candidate's original essay:\n\"\"\"\n{source_essay}\n\"\"\""
+                            )
+                            band9_text = groq.generate(REWRITE_TO_BAND9_PROMPT, rewrite_user_prompt, temperature=0.5)
+                            st.session_state.band9_rewrite = band9_text.strip()
+                            if st.session_state.selected_history_index is not None:
+                                idx = st.session_state.selected_history_index
+                                if 0 <= idx < len(st.session_state.essay_history_log):
+                                    st.session_state.essay_history_log[idx]["band9_rewrite"] = band9_text.strip()
+                        except (GroqAPIError, GroqParsingError) as exc:
+                            st.error(f"❌ Rewrite failed: {exc}")
+
+        if st.session_state.band9_rewrite:
+            compare_left, compare_right = st.columns(2, gap="large")
+            display_original = essay_text if essay_text and essay_text.strip() else (
+                st.session_state.essay_history_log[st.session_state.selected_history_index]["essay_text"]
+                if st.session_state.selected_history_index is not None
+                and 0 <= st.session_state.selected_history_index < len(st.session_state.essay_history_log)
+                else ""
+            )
+            with compare_left:
+                st.markdown(
+                    f"""
+                    <div class="doc-card">
+                        <h4>📄 Your original</h4>
+                        <div class="doc-card-body" style="white-space:pre-wrap;">{html.escape(display_original)}</div>
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
+            with compare_right:
+                st.markdown(
+                    f"""
+                    <div class="doc-card" style="border-color: var(--gold);">
+                        <h4>✨ Band 9.0 sample version</h4>
+                        <div class="doc-card-body" style="white-space:pre-wrap;">{html.escape(st.session_state.band9_rewrite)}</div>
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
+        else:
+            st.info("💡 Click **Generate Band 9 Sample Version** above to see the side-by-side comparison.")
     else:
         st.info("👆 Paste an essay above and submit it to receive your full band breakdown.")
 
@@ -1679,7 +2154,153 @@ with tab_history:
             profile.mistake_counter.clear()
             st.session_state.last_writing_submission = None
             st.session_state.last_speaking_submission = None
+            st.session_state.essay_history_log = []
+            st.session_state.selected_history_index = None
+            st.session_state.band9_rewrite = None
             st.rerun()
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# TAB 6 — BAND SCORE CALCULATOR (pure-code, no API call)
+# ──────────────────────────────────────────────────────────────────────────
+with tab_calculator:
+    st.markdown('<div class="section-eyebrow">Diagnostic band score calculator</div>', unsafe_allow_html=True)
+    st.caption(
+        "Pure arithmetic against the official IELTS conversion tables — instant, free, and works "
+        "even without a Groq API key. Move the sliders to see your live overall band estimate."
+    )
+
+    calc_col_inputs, calc_col_dial = st.columns([1.3, 1], gap="large")
+
+    with calc_col_inputs:
+        st.markdown('<div class="doc-card"><h4>Listening &amp; Reading</h4></div>', unsafe_allow_html=True)
+        listening_correct = st.slider("Listening — correct answers (0–40)", min_value=0, max_value=40, value=30, key="calc_listening")
+        reading_correct = st.slider("Reading — correct answers (0–40)", min_value=0, max_value=40, value=30, key="calc_reading")
+
+        listening_score = listening_band(listening_correct)
+        reading_score = reading_band_academic(reading_correct)
+
+        lcol1, lcol2 = st.columns(2)
+        with lcol1:
+            st.metric("Listening Band", f"{listening_score:.1f}")
+        with lcol2:
+            st.metric("Reading Band", f"{reading_score:.1f}")
+
+        st.markdown("---")
+        st.markdown('<div class="doc-card"><h4>Writing &amp; Speaking (self-estimate)</h4></div>', unsafe_allow_html=True)
+        st.caption("No official raw-score conversion exists for these two — examiners assign the band directly. Estimate your own, or use your latest AI-graded band from the Writing tab.")
+        default_writing_band = (
+            st.session_state.last_writing_submission.score.overall
+            if st.session_state.last_writing_submission else 6.5
+        )
+        writing_band_input = st.slider("Writing — estimated band", min_value=0.0, max_value=9.0, value=float(default_writing_band), step=0.5, key="calc_writing")
+        speaking_band_input = st.slider("Speaking — estimated band", min_value=0.0, max_value=9.0, value=6.5, step=0.5, key="calc_speaking")
+
+    with calc_col_dial:
+        overall_estimate = overall_band_from_four(listening_score, reading_score, writing_band_input, speaking_band_input)
+        st.markdown('<div class="score-dial-wrap">', unsafe_allow_html=True)
+        st.markdown(render_band_dial_svg(overall_estimate, label="ESTIMATED OVERALL BAND"), unsafe_allow_html=True)
+        st.markdown("</div>", unsafe_allow_html=True)
+        st.markdown(
+            f"""
+            <div class="doc-card" style="text-align:center;">
+                <div class="doc-card-body" style="font-size:0.85rem;">
+                    Listening <b style="color:#F7F5F0;">{listening_score:.1f}</b> ·
+                    Reading <b style="color:#F7F5F0;">{reading_score:.1f}</b> ·
+                    Writing <b style="color:#F7F5F0;">{writing_band_input:.1f}</b> ·
+                    Speaking <b style="color:#F7F5F0;">{speaking_band_input:.1f}</b>
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+        st.caption("Rounded per official IELTS rule: .25 rounds up to the next .5; .75 rounds up to the next whole band.")
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# TAB 7 — ABOUT
+# ──────────────────────────────────────────────────────────────────────────
+with tab_about:
+    about_col1, about_col2 = st.columns([1.1, 1], gap="large")
+
+    with about_col1:
+        st.markdown(
+            """
+            <div class="doc-card">
+                <h4>About this platform</h4>
+                <div class="doc-card-body">
+                    <p><b style="color:#F7F5F0;">IELTS AI Tutor</b> exists because real examiner feedback is
+                    expensive, slow, and usually capped at one or two mock essays before a test date. This
+                    platform gives students unlimited, examiner-grade feedback against the actual IELTS band
+                    descriptors — for free, in their own language, available at 2am the night before an exam.</p>
+                    <p>Every feature here is built to solve a real bottleneck in IELTS prep: the
+                    <b style="color:var(--gold);">Error Fingerprint</b> tracks recurring mistakes across
+                    sessions instead of grading each essay in isolation, the
+                    <b style="color:var(--gold);">Band 9 Re-Write</b> shows students exactly what their own
+                    ideas look like at the top band instead of a generic sample, and the
+                    <b style="color:var(--gold);">Score Calculator</b> gives an instant, API-free diagnostic
+                    using the same conversion tables the real test uses.</p>
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+        st.markdown(
+            """
+            <div class="doc-card">
+                <h4>Tech stack</h4>
+                <div class="doc-card-body" style="font-size:0.9rem;">
+                    Built single-file in Python with Streamlit for the UI layer, Groq's free-tier API
+                    (an open-weight chat model plus Whisper) for AI grading and speech transcription, and
+                    hand-built SVG for every chart and certificate — no charting library, no database, no
+                    auth system. Every visual and number on this page is either real-time arithmetic or a
+                    live model call; nothing is mocked.
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+    with about_col2:
+        st.markdown(
+            """
+            <div class="doc-card">
+                <h4>Builder</h4>
+                <div class="doc-card-body">
+                    <p style="font-size:1.05rem; font-weight:700; color:#F7F5F0; margin-bottom:0.2rem;">Atif Al Azad</p>
+                    <p style="color:var(--gold); font-size:0.85rem; margin-bottom:0.9rem;">
+                        Grade 11 STEM Student (PCM-CS) · DPS Modern Indian School, Doha, Qatar
+                    </p>
+                    <p>A Grade 11 student specialising in Physics, Chemistry, Mathematics, and Computer
+                    Science, with a 98% aggregate in the CBSE Class 10 boards and a Top 10 finish out of
+                    360+ students. Certified in JavaScript Essentials (Cisco Networking Academy, top 0.1%
+                    score) with a parallel focus on cybersecurity fundamentals and systems engineering.</p>
+                    <p>Builds at the intersection of code and cognition — this app is one expression of
+                    that, alongside an ongoing research paper on how digital presence and social media
+                    algorithms affect the cognitive load of high school students.</p>
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+        st.markdown(
+            """
+            <div class="doc-card">
+                <h4>Background</h4>
+                <div class="doc-card-body" style="font-size:0.88rem;">
+                    <p><b style="color:#F7F5F0;">Skills:</b> Python, JavaScript, OOP, algorithm design,
+                    system architecture, data analysis, technical writing.</p>
+                    <p><b style="color:#F7F5F0;">Languages:</b> English (99%), French (98%), Bangla, Hindi,
+                    and Urdu — native or near-native across all five.</p>
+                    <p><b style="color:#F7F5F0;">Active in:</b> Science Club and Mathematics Club at
+                    DPS-Modern Indian School; volunteered 10 hours at the Qatar Educational Leadership
+                    Expo 2026 coordinating registration and exhibitor logistics.</p>
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
 
 
 # ══════════════════════════════════════════════════════════════════════════
