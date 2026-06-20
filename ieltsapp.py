@@ -711,7 +711,7 @@ class ErrorFingerprintEngine:
             return None
         entry = top[0]
         return (
-            f"Your #1 recurring issue is **{entry.label}** — it has appeared "
+            f"Your #1 recurring issue is <b>{html.escape(entry.label)}</b> — it has appeared "
             f"{entry.count} time{'s' if entry.count != 1 else ''} across your submissions. "
             f"Fixing this one pattern will likely move your score faster than anything else."
         )
@@ -889,22 +889,31 @@ def render_fingerprint_bars_html(entries: list[FingerprintEntry]) -> str:
         "steady": ("#C9A227", "→ steady"),
         "new": ("#94A3B8", "new"),
     }
-    rows = ""
+    rows: list[str] = []
     for entry in entries:
         width_pct = max(8, int((entry.count / max_count) * 100))
         color, trend_label = trend_styles.get(entry.trend, ("#94A3B8", entry.trend))
-        rows += f"""
-        <div style="margin-bottom: 0.85rem;">
-            <div style="display:flex; justify-content:space-between; font-size:0.85rem; margin-bottom:0.3rem;">
-                <span style="color:#F7F5F0; font-weight:600;">{html.escape(entry.label)}</span>
-                <span style="color:{color}; font-size:0.75rem; font-weight:600;">{trend_label} · ×{entry.count}</span>
-            </div>
-            <div style="background:#1E1B14; border-radius:6px; height:8px; overflow:hidden;">
-                <div style="background:#C9A227; width:{width_pct}%; height:100%; border-radius:6px;"></div>
-            </div>
-        </div>
-        """
-    return f'<div style="padding: 0.4rem 0;">{rows}</div>'
+        # NOTE: built as a single line with no embedded newlines/indentation.
+        # Streamlit's markdown renderer treats a multi-line f-string here as
+        # Markdown source, not pure HTML. Once two rows are joined, the
+        # whitespace-only line left between them reads as a "blank line",
+        # which ends the raw-HTML block early — every row after the first
+        # then gets reinterpreted as an indented code block and prints as
+        # literal "<div style=...>" text instead of rendering. Keeping each
+        # row on one line sidesteps that entirely.
+        row = (
+            '<div style="margin-bottom: 0.85rem;">'
+            '<div style="display:flex; justify-content:space-between; font-size:0.85rem; margin-bottom:0.3rem;">'
+            f'<span style="color:#F7F5F0; font-weight:600;">{html.escape(entry.label)}</span>'
+            f'<span style="color:{color}; font-size:0.75rem; font-weight:600;">{trend_label} · ×{entry.count}</span>'
+            "</div>"
+            '<div style="background:#1E1B14; border-radius:6px; height:8px; overflow:hidden;">'
+            f'<div style="background:#C9A227; width:{width_pct}%; height:100%; border-radius:6px;"></div>'
+            "</div>"
+            "</div>"
+        )
+        rows.append(row)
+    return '<div style="padding: 0.4rem 0;">' + "".join(rows) + "</div>"
 
 
 # ══════════════════════════════════════════════════════════════════════════
