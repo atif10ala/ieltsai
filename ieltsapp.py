@@ -44,18 +44,25 @@ import streamlit as st
 # keys never appear in the codebase at all. See the setup instructions in
 # the comment block below for exactly what to put where.
 #
+# The whole app now runs on a single free Groq API key — one key powers
+# both the text-grading model (writing/speaking feedback) and the Whisper
+# transcription model (voice recording). No other provider is needed.
+#
 # LOCAL SETUP:
 #   1. Create a folder named ".streamlit" next to this app.py file.
 #   2. Inside it, create a file named "secrets.toml" with this content:
 #
-#        GEMINI_API_KEY = "your-real-gemini-key-here"
 #        GROQ_API_KEY = "your-real-groq-key-here"
 #
 #   3. Never commit .streamlit/secrets.toml to GitHub — add it to .gitignore.
 #
 # STREAMLIT COMMUNITY CLOUD SETUP:
 #   In your app's dashboard, go to Settings -> Secrets, and paste the same
-#   two lines shown above into the box provided. No file needed there.
+#   line shown above into the box provided. No file needed there.
+#
+# GET A FREE KEY:
+#   Sign in at https://console.groq.com -> API Keys -> Create API Key.
+#   Groq's free tier requires no credit card.
 
 def _get_secret(key: str, fallback: str) -> str:
     """Reads a key from st.secrets if present, else returns a placeholder."""
@@ -65,12 +72,13 @@ def _get_secret(key: str, fallback: str) -> str:
         return fallback
 
 
-API_KEY: str = _get_secret("GEMINI_API_KEY", "YOUR_GEMINI_API_KEY_HERE")
 GROQ_API_KEY: str = _get_secret("GROQ_API_KEY", "YOUR_GROQ_API_KEY_HERE")
 
-GEMINI_HOST: str = "generativelanguage.googleapis.com"
-GEMINI_MODEL: str = "gemini-2.5-flash"
-GEMINI_TIMEOUT_SECONDS: int = 60
+GROQ_HOST: str = "api.groq.com"
+GROQ_CHAT_PATH: str = "/openai/v1/chat/completions"
+GROQ_CHAT_MODEL: str = "openai/gpt-oss-120b"
+GROQ_WHISPER_MODEL: str = "whisper-large-v3-turbo"
+GROQ_TIMEOUT_SECONDS: int = 60
 
 APP_NAME: str = "IELTS AI Tutor"
 APP_TAGLINE: str = "Your personal examiner. Available 24/7. In your language. At no cost."
@@ -88,7 +96,7 @@ BAND_DEVELOPING = 5.5
 # LAYER 2 — DOMAIN MODELS
 # ══════════════════════════════════════════════════════════════════════════
 # Plain dataclasses representing the core entities of the platform. These
-# are framework-agnostic — they know nothing about Streamlit or Gemini —
+# are framework-agnostic — they know nothing about Streamlit or Groq —
 # which is what makes them portable to a real database layer in Phase B.
 
 @dataclass
@@ -191,33 +199,36 @@ class StudentProfile:
 # LAYER 3 — EXCEPTIONS
 # ══════════════════════════════════════════════════════════════════════════
 
-class GeminiAPIError(Exception):
-    """Raised for any failure in the Gemini API request/response cycle."""
+class GroqAPIError(Exception):
+    """Raised for any failure in a Groq API request/response cycle (text or audio)."""
 
 
-class GeminiParsingError(Exception):
-    """Raised when a Gemini response cannot be parsed into the expected shape."""
+class GroqParsingError(Exception):
+    """Raised when a Groq chat response cannot be parsed into the expected shape."""
 
 
 # ══════════════════════════════════════════════════════════════════════════
 # LAYER 4 — AI GATEWAY (API HANDLING)
 # ══════════════════════════════════════════════════════════════════════════
-# This is the ONLY part of the codebase that knows the Gemini API exists.
-# Every other layer talks to `GeminiClient`, never to http.client directly.
-# This isolation is what lets us swap Gemini for Claude, or add a caching
-# layer, or add retries, without touching a single line of UI code.
+# This is the ONLY part of the codebase that knows the Groq chat-completions
+# API exists. Every other layer talks to `GroqClient`, never to http.client
+# directly. This isolation is what lets us swap models, add retries, or add
+# a caching layer without touching a single line of UI code.
 
-class GeminiClient:
+class GroqClient:
     """
-    Thin, dependency-free client for the Gemini `generateContent` endpoint.
+    Thin, dependency-free client for Groq's OpenAI-compatible
+    `/openai/v1/chat/completions` endpoint.
 
     Uses the standard library exclusively (`http.client` + `json`) so that
     Streamlit Community Cloud deployments install instantly with zero
     extra wheels — a deliberate Phase A constraint that keeps the build
-    pipeline trivial to debug.
+    pipeline trivial to debug. Groq's free tier needs no credit card and
+    is the sole AI provider for this app — both grading (this client) and
+    voice transcription (GroqWhisperClient below) run on the same key.
     """
 
-    def __init__(self, api_key: str, model: str = GEMINI_MODEL, host: str = GEMINI_HOST) -> None:
+    def __init__(self, api_key: str, model: str = GROQ_CHAT_MODEL, host: str = GROQ_HOST) -> None:
         self.api_key = api_key
         self.model = model
         self.host = host
@@ -225,53 +236,42 @@ class GeminiClient:
     @property
     def is_configured(self) -> bool:
         """True once a real key has replaced the placeholder."""
-        return bool(self.api_key) and self.api_key != "YOUR_GEMINI_API_KEY_HERE"
+        return bool(self.api_key) and self.api_key != "YOUR_GROQ_API_KEY_HERE"
 
     def generate(self, system_prompt: str, user_prompt: str, temperature: float = 0.4) -> str:
         """
-        Sends a system + user prompt pair to Gemini and returns the raw
+        Sends a system + user prompt pair to Groq and returns the raw
         text of the model's reply.
 
         Raises:
-            GeminiAPIError: on missing key, network failure, timeout, or
+            GroqAPIError: on missing key, network failure, timeout, or
                 a non-200 response from the API.
         """
         if not self.is_configured:
-            raise GeminiAPIError(
-                "No Gemini API key configured. Set API_KEY at the top of app.py."
+            raise GroqAPIError(
+                "No Groq API key configured. Set GROQ_API_KEY in .streamlit/secrets.toml."
             )
 
-        # Google is migrating Gemini API keys from the old "AIza..." format
-        # (passed as a ?key= query param) to a new "auth key" format, which
-        # typically starts with "AQ." and must be sent as a Bearer token in
-        # the Authorization header instead. Sending it BOTH ways at once
-        # triggers a "Multiple authentication credentials received" error
-        # on the new key type, so we branch on the key's prefix and send it
-        # exactly one way, matching whichever format the key actually is.
-        is_auth_key = self.api_key.startswith("AQ.")
-
-        if is_auth_key:
-            path = f"/v1beta/models/{self.model}:generateContent"
-            headers = {
-                "Content-Type": "application/json",
-                "Authorization": f"Bearer {self.api_key}",
-            }
-        else:
-            path = f"/v1beta/models/{self.model}:generateContent?key={self.api_key}"
-            headers = {"Content-Type": "application/json"}
-
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {self.api_key}",
+        }
         payload = {
-            "system_instruction": {"parts": [{"text": system_prompt}]},
-            "contents": [{"role": "user", "parts": [{"text": user_prompt}]}],
-            "generationConfig": {"temperature": temperature, "maxOutputTokens": 4096},
+            "model": self.model,
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            "temperature": temperature,
+            "max_completion_tokens": 4096,
         }
 
         connection: Optional[http.client.HTTPSConnection] = None
         try:
-            connection = http.client.HTTPSConnection(self.host, timeout=GEMINI_TIMEOUT_SECONDS)
+            connection = http.client.HTTPSConnection(self.host, timeout=GROQ_TIMEOUT_SECONDS)
             connection.request(
                 "POST",
-                path,
+                GROQ_CHAT_PATH,
                 body=json.dumps(payload),
                 headers=headers,
             )
@@ -279,52 +279,46 @@ class GeminiClient:
             raw_body = response.read().decode("utf-8")
             status = response.status
         except socket.timeout as exc:
-            raise GeminiAPIError("The examiner took too long to respond. Please try again.") from exc
+            raise GroqAPIError("The examiner took too long to respond. Please try again.") from exc
         except (http.client.HTTPException, OSError) as exc:
-            raise GeminiAPIError(f"Could not reach the Gemini API: {exc}") from exc
+            raise GroqAPIError(f"Could not reach the Groq API: {exc}") from exc
         finally:
             if connection is not None:
                 connection.close()
 
         if status != 200:
             hint = ""
-            if status in (400, 401, 403):
-                hint = (
-                    " (This often means the API key format/auth method doesn't match what "
-                    "Gemini expects right now — Google is mid-migration between 'AIza...' "
-                    "query-param keys and newer 'AQ.' Bearer-token auth keys. Double-check "
-                    "you copied the full key with no extra spaces.)"
-                )
-            raise GeminiAPIError(f"Gemini API returned HTTP {status}: {raw_body[:300]}{hint}")
+            if status == 429:
+                hint = " (Free-tier rate limit hit — wait a moment and try again.)"
+            elif status in (401, 403):
+                hint = " (Check that GROQ_API_KEY is correct and not expired.)"
+            raise GroqAPIError(f"Groq API returned HTTP {status}: {raw_body[:300]}{hint}")
 
         try:
             parsed = json.loads(raw_body)
-            return parsed["candidates"][0]["content"]["parts"][0]["text"]
+            return parsed["choices"][0]["message"]["content"]
         except (KeyError, IndexError, json.JSONDecodeError) as exc:
-            raise GeminiParsingError(f"Unexpected response shape from Gemini: {exc}") from exc
+            raise GroqParsingError(f"Unexpected response shape from Groq: {exc}") from exc
 
 
 # ══════════════════════════════════════════════════════════════════════════
 # LAYER 4B — VOICE GATEWAY (Groq Whisper transcription)
 # ══════════════════════════════════════════════════════════════════════════
-# Mirrors GeminiClient's isolation principle: this is the ONLY place that
-# knows Groq exists. It hand-builds a multipart/form-data request with
-# http.client (no requests/groq SDK), keeping the zero-dependency
-# Streamlit Community Cloud deploy story intact end-to-end. Used by the
-# Speaking Simulator tab to turn a recorded mic clip into a transcript,
-# which then flows into the exact same SPEAKING_EXAMINER_PROMPT pipeline
-# used for typed responses.
-
-class GroqAPIError(Exception):
-    """Raised for any failure in the Groq Whisper transcription request."""
+# Mirrors GroqClient's isolation principle: this is the ONLY place that
+# hand-builds the Whisper multipart/form-data request with http.client
+# (no requests/groq SDK), keeping the zero-dependency Streamlit Community
+# Cloud deploy story intact end-to-end. Used by the Speaking Simulator tab
+# to turn a recorded mic clip into a transcript, which then flows into the
+# exact same SPEAKING_EXAMINER_PROMPT pipeline used for typed responses.
+# Same GROQ_API_KEY as GroqClient above — one key, one provider, two endpoints.
 
 
 class GroqWhisperClient:
     """Thin, dependency-free client for Groq's Whisper transcription endpoint."""
 
-    HOST = "api.groq.com"
+    HOST = GROQ_HOST
     PATH = "/openai/v1/audio/transcriptions"
-    MODEL = "whisper-large-v3-turbo"
+    MODEL = GROQ_WHISPER_MODEL
 
     def __init__(self, api_key: str) -> None:
         self.api_key = api_key
@@ -371,7 +365,7 @@ class GroqWhisperClient:
 
         connection: Optional[http.client.HTTPSConnection] = None
         try:
-            connection = http.client.HTTPSConnection(self.HOST, timeout=GEMINI_TIMEOUT_SECONDS)
+            connection = http.client.HTTPSConnection(self.HOST, timeout=GROQ_TIMEOUT_SECONDS)
             connection.request(
                 "POST",
                 self.PATH,
@@ -528,7 +522,7 @@ def parse_mistake_tags(raw_tag_list: str) -> list[MistakeTag]:
 
 
 def parse_writing_response(raw_text: str, task_type: str, target_band: float, word_count: int) -> WritingSubmission:
-    """Parses a raw Gemini writing-evaluation response into a WritingSubmission."""
+    """Parses a raw Groq writing-evaluation response into a WritingSubmission."""
     score = WritingScore(
         overall=_safe_band(_extract_tag("overall", raw_text)),
         task_achievement=_safe_band(_extract_tag("task_achievement", raw_text)),
@@ -549,7 +543,7 @@ def parse_writing_response(raw_text: str, task_type: str, target_band: float, wo
 
 
 def parse_speaking_response(raw_text: str, part: str, prompt_text: str, response_text: str) -> tuple[SpeakingSubmission, list[MistakeTag]]:
-    """Parses a raw Gemini speaking-evaluation response into a SpeakingSubmission."""
+    """Parses a raw Groq speaking-evaluation response into a SpeakingSubmission."""
     submission = SpeakingSubmission(
         part=part,
         prompt=prompt_text,
@@ -734,10 +728,10 @@ def init_session_state() -> None:
     """Idempotently initialises all session-scoped state. Safe to call every rerun."""
     if "profile" not in st.session_state:
         st.session_state.profile = StudentProfile()
-    if "gemini_client" not in st.session_state:
-        st.session_state.gemini_client = GeminiClient(API_KEY)
     if "groq_client" not in st.session_state:
-        st.session_state.groq_client = GroqWhisperClient(GROQ_API_KEY)
+        st.session_state.groq_client = GroqClient(GROQ_API_KEY)
+    if "groq_whisper_client" not in st.session_state:
+        st.session_state.groq_whisper_client = GroqWhisperClient(GROQ_API_KEY)
     if "word_of_day_index" not in st.session_state:
         st.session_state.word_of_day_index = random.randint(0, len(WORD_OF_THE_DAY_BANK) - 1)
     if "active_speaking_prompt" not in st.session_state:
@@ -1205,8 +1199,8 @@ st.markdown(DESIGN_SYSTEM_CSS, unsafe_allow_html=True)
 init_session_state()
 register_daily_visit()
 profile: StudentProfile = st.session_state.profile
-gemini: GeminiClient = st.session_state.gemini_client
-groq: GroqWhisperClient = st.session_state.groq_client
+groq: GroqClient = st.session_state.groq_client
+groq_whisper: GroqWhisperClient = st.session_state.groq_whisper_client
 
 
 def severity_badge(band: float) -> str:
@@ -1247,7 +1241,7 @@ def render_markdown_body(text: str) -> str:
 st.markdown(
     f"""
     <div class="masthead">
-        <div class="masthead-eyebrow">Examiner-grade AI feedback · gemini-2.5-flash</div>
+        <div class="masthead-eyebrow">Examiner-grade AI feedback · powered by Groq (free)</div>
         <h1>🎓 {APP_NAME}</h1>
         <p>{APP_TAGLINE} Built by an IELTS instructor, graded against the same four
         criteria a real examiner uses — and the only platform that remembers every
@@ -1307,10 +1301,10 @@ with st.sidebar:
     st.markdown(
         f"""
         <div style="font-size: 0.72rem; color: #8A8775; font-family: 'JetBrains Mono', monospace;">
-            MODEL: {GEMINI_MODEL}<br>
+            MODEL: {GROQ_CHAT_MODEL}<br>
             MODE: STRICT EXAMINER<br>
-            STATUS: {"● GEMINI CONNECTED" if gemini.is_configured else "○ GEMINI KEY NOT SET"}<br>
-            STATUS: {"● GROQ CONNECTED" if GROQ_API_KEY != "YOUR_GROQ_API_KEY_HERE" else "○ GROQ KEY NOT SET"}
+            STATUS: {"● GROQ GRADING CONNECTED" if groq.is_configured else "○ GROQ KEY NOT SET"}<br>
+            STATUS: {"● GROQ VOICE CONNECTED" if groq_whisper.is_configured else "○ GROQ KEY NOT SET"}
         </div>
         """,
         unsafe_allow_html=True,
@@ -1361,8 +1355,8 @@ with tab_writing:
         if analyze_clicked:
             if not essay_text or not essay_text.strip():
                 st.warning("⚠️ Please paste an essay before requesting an evaluation.")
-            elif not gemini.is_configured:
-                st.error("🔑 No Gemini API key configured. Set API_KEY at the top of app.py.")
+            elif not groq.is_configured:
+                st.error("🔑 No Groq API key configured. Set GROQ_API_KEY in .streamlit/secrets.toml.")
             else:
                 with st.spinner("🧐 Marking against the official IELTS Writing criteria..."):
                     try:
@@ -1371,13 +1365,13 @@ with tab_writing:
                             f"Candidate Target Band Score: {profile.target_band}\n\n"
                             f"Essay to mark:\n\"\"\"\n{essay_text}\n\"\"\""
                         )
-                        raw_response = gemini.generate(WRITING_EXAMINER_PROMPT, user_prompt)
+                        raw_response = groq.generate(WRITING_EXAMINER_PROMPT, user_prompt)
                         submission = parse_writing_response(raw_response, task_type, profile.target_band, word_count)
                         profile.writing_history.append(submission)
                         ErrorFingerprintEngine.record(profile, submission.mistakes)
                         st.session_state.last_writing_submission = submission
                         st.success("✅ Evaluation complete — see your scorecard.")
-                    except (GeminiAPIError, GeminiParsingError) as exc:
+                    except (GroqAPIError, GroqParsingError) as exc:
                         st.error(f"❌ Evaluation failed: {exc}")
 
     with col_cert:
@@ -1455,7 +1449,7 @@ with tab_speaking:
         unsafe_allow_html=True,
     )
 
-    if groq.is_configured:
+    if groq_whisper.is_configured:
         st.caption(
             "🎙️ Record your spoken answer below. It's transcribed automatically with "
             "Groq Whisper, then graded exactly like a typed response."
@@ -1467,7 +1461,7 @@ with tab_speaking:
             if st.session_state.get("transcribed_audio_id") != current_audio_id:
                 with st.spinner("🎧 Transcribing your response..."):
                     try:
-                        transcript = groq.transcribe(audio_clip.getvalue())
+                        transcript = groq_whisper.transcribe(audio_clip.getvalue())
                         st.session_state.speaking_transcript_box = transcript
                         st.session_state.transcribed_audio_id = current_audio_id
                     except GroqAPIError as exc:
@@ -1475,7 +1469,7 @@ with tab_speaking:
     else:
         st.caption(
             "🎙️ Voice recording needs a Groq API key to transcribe audio. Add GROQ_API_KEY "
-            "at the top of app.py to enable the microphone — typing still works below either way."
+            "in .streamlit/secrets.toml to enable the microphone — typing still works below either way."
         )
 
     st.markdown(
@@ -1493,8 +1487,8 @@ with tab_speaking:
     if st.button("🚀 Submit for grading", key="analyze_speaking"):
         if not speaking_response or not speaking_response.strip():
             st.warning("⚠️ Please record or type a response before requesting feedback.")
-        elif not gemini.is_configured:
-            st.error("🔑 No Gemini API key configured. Set API_KEY at the top of app.py.")
+        elif not groq.is_configured:
+            st.error("🔑 No Groq API key configured. Set GROQ_API_KEY in .streamlit/secrets.toml.")
         else:
             with st.spinner("🧐 The examiner is reviewing your response..."):
                 try:
@@ -1503,7 +1497,7 @@ with tab_speaking:
                         f"Question/Cue card: {active_prompt.prompt}\n\n"
                         f"Candidate's transcribed response:\n\"\"\"\n{speaking_response}\n\"\"\""
                     )
-                    raw_response = gemini.generate(SPEAKING_EXAMINER_PROMPT, user_prompt)
+                    raw_response = groq.generate(SPEAKING_EXAMINER_PROMPT, user_prompt)
                     speaking_submission, mistakes = parse_speaking_response(
                         raw_response, active_prompt.part, active_prompt.prompt, speaking_response
                     )
@@ -1512,7 +1506,7 @@ with tab_speaking:
                     ErrorFingerprintEngine.record(profile, mistakes)
                     st.session_state.last_speaking_submission = speaking_submission
                     st.success("✅ Feedback ready.")
-                except (GeminiAPIError, GeminiParsingError) as exc:
+                except (GroqAPIError, GroqParsingError) as exc:
                     st.error(f"❌ Evaluation failed: {exc}")
 
     if st.session_state.last_speaking_submission:
@@ -1694,7 +1688,7 @@ with tab_history:
 # Phase B migration path:
 #   Layer 1  (Config)      -> config.py, reading from st.secrets / env vars
 #   Layer 2  (Models)      -> domain/models.py, becomes SQLAlchemy models
-#   Layer 4  (GeminiClient)-> infra/ai_gateway.py, gains retry + caching
+#   Layer 4  (GroqClient)  -> infra/ai_gateway.py, gains retry + caching
 #   Layer 5  (Prompts)     -> infra/prompts/ as versioned template files
 #   Layer 6  (Parsing)     -> domain/parsing.py, unit-testable in isolation
 #   Layer 8  (Fingerprint) -> domain/fingerprint_engine.py, queries Postgres
