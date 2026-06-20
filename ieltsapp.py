@@ -48,8 +48,8 @@ import streamlit as st
 #   1. Create a folder named ".streamlit" next to this app.py file.
 #   2. Inside it, create a file named "secrets.toml" with this content:
 #
-#        GEMINI_API_KEY = "AQ.Ab8RN6Lwiez8KXwVxRvSlDmN4anMxhsOmztI6kT7d2xXeSis1g"
-#        GROQ_API_KEY = "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"
+#        GEMINI_API_KEY = "your-real-gemini-key-here"
+#        GROQ_API_KEY = "your-real-groq-key-here"
 #
 #   3. Never commit .streamlit/secrets.toml to GitHub — add it to .gitignore.
 #
@@ -65,8 +65,8 @@ def _get_secret(key: str, fallback: str) -> str:
         return fallback
 
 
-API_KEY: str = _get_secret("AQ.Ab8RN6Lwiez8KXwVxRvSlDmN4anMxhsOmztI6kT7d2xXeSis1g", "AQ.Ab8RN6Lwiez8KXwVxRvSlDmN4anMxhsOmztI6kT7d2xXeSis1g")
-GROQ_API_KEY: str = _get_secret("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", "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")
+API_KEY: str = _get_secret("GEMINI_API_KEY", "YOUR_GEMINI_API_KEY_HERE")
+GROQ_API_KEY: str = _get_secret("GROQ_API_KEY", "YOUR_GROQ_API_KEY_HERE")
 
 GEMINI_HOST: str = "generativelanguage.googleapis.com"
 GEMINI_MODEL: str = "gemini-2.5-flash"
