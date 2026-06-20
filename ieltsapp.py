@@ -65,8 +65,8 @@ def _get_secret(key: str, fallback: str) -> str:
         return fallback
 
 
-API_KEY: str = _get_secret("AQ.Ab8RN6Lwiez8KXwVxRvSlDmN4anMxhsOmztI6kT7d2xXeSis1g", "AQ.Ab8RN6Lwiez8KXwVxRvSlDmN4anMxhsOmztI6kT7d2xXeSis1g")
-GROQ_API_KEY: str = _get_secret("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", "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")
+API_KEY: str = _get_secret("GEMINI_API_KEY", "YOUR_GEMINI_API_KEY_HERE")
+GROQ_API_KEY: str = _get_secret("GROQ_API_KEY", "YOUR_GROQ_API_KEY_HERE")
 
 GEMINI_HOST: str = "generativelanguage.googleapis.com"
 GEMINI_MODEL: str = "gemini-2.5-flash"
@@ -241,7 +241,25 @@ class GeminiClient:
                 "No Gemini API key configured. Set API_KEY at the top of app.py."
             )
 
-        path = f"/v1beta/models/{self.model}:generateContent?key={self.api_key}"
+        # Google is migrating Gemini API keys from the old "AIza..." format
+        # (passed as a ?key= query param) to a new "auth key" format, which
+        # typically starts with "AQ." and must be sent as a Bearer token in
+        # the Authorization header instead. Sending it BOTH ways at once
+        # triggers a "Multiple authentication credentials received" error
+        # on the new key type, so we branch on the key's prefix and send it
+        # exactly one way, matching whichever format the key actually is.
+        is_auth_key = self.api_key.startswith("AQ.")
+
+        if is_auth_key:
+            path = f"/v1beta/models/{self.model}:generateContent"
+            headers = {
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {self.api_key}",
+            }
+        else:
+            path = f"/v1beta/models/{self.model}:generateContent?key={self.api_key}"
+            headers = {"Content-Type": "application/json"}
+
         payload = {
             "system_instruction": {"parts": [{"text": system_prompt}]},
             "contents": [{"role": "user", "parts": [{"text": user_prompt}]}],
@@ -255,7 +273,7 @@ class GeminiClient:
                 "POST",
                 path,
                 body=json.dumps(payload),
-                headers={"Content-Type": "application/json"},
+                headers=headers,
             )
             response = connection.getresponse()
             raw_body = response.read().decode("utf-8")
@@ -269,7 +287,15 @@ class GeminiClient:
                 connection.close()
 
         if status != 200:
-            raise GeminiAPIError(f"Gemini API returned HTTP {status}: {raw_body[:300]}")
+            hint = ""
+            if status in (400, 401, 403):
+                hint = (
+                    " (This often means the API key format/auth method doesn't match what "
+                    "Gemini expects right now — Google is mid-migration between 'AIza...' "
+                    "query-param keys and newer 'AQ.' Bearer-token auth keys. Double-check "
+                    "you copied the full key with no extra spaces.)"
+                )
+            raise GeminiAPIError(f"Gemini API returned HTTP {status}: {raw_body[:300]}{hint}")
 
         try:
             parsed = json.loads(raw_body)
