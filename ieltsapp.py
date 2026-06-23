@@ -79,7 +79,7 @@ GEMINI_API_KEY: str = _get_secret("GEMINI_API_KEY", "YOUR_GEMINI_API_KEY_HERE")
 
 GEMINI_HOST: str = "generativelanguage.googleapis.com"
 GEMINI_API_VERSION: str = "v1beta"
-GEMINI_CHAT_MODEL: str = "gemini-2.5-flash"
+GEMINI_CHAT_MODEL: str = "gemini-3.5-flash"
 GEMINI_TIMEOUT_SECONDS: int = 60
 
 APP_NAME: str = "IELTS AI Tutor"
@@ -1894,15 +1894,19 @@ with tab_writing:
     gen_col1, gen_col2 = st.columns([4, 1.4])
     with gen_col1:
         st.markdown('<div class="section-eyebrow">Essay topic / prompt</div>', unsafe_allow_html=True)
+        # Sync generated prompt into the widget's own state slot before rendering,
+        # so Surprise Me actually updates the text area (keyed widgets ignore value=
+        # when their key already exists in session_state).
+        if st.session_state.generated_prompt_text:
+            st.session_state.topic_text_input = st.session_state.generated_prompt_text
+            st.session_state.generated_prompt_text = ""  # consume it
         topic_text = st.text_area(
             "Essay topic",
-            value=st.session_state.generated_prompt_text,
             height=70,
             placeholder="Paste a prompt here, or click Surprise Me to generate one instantly →",
             label_visibility="collapsed",
             key="topic_text_input",
         )
-        st.session_state.generated_prompt_text = topic_text
     with gen_col2:
         st.markdown('<div class="section-eyebrow">&nbsp;</div>', unsafe_allow_html=True)
         if st.button("🎲 Surprise Me", use_container_width=True, key="surprise_me_prompt"):
