@@ -79,7 +79,7 @@ GEMINI_API_KEY: str = _get_secret("GEMINI_API_KEY", "YOUR_GEMINI_API_KEY_HERE")
 
 GEMINI_HOST: str = "generativelanguage.googleapis.com"
 GEMINI_API_VERSION: str = "v1beta"
-GEMINI_CHAT_MODEL: str = "gemini-3.5-flash"
+GEMINI_CHAT_MODEL: str = "gemini-2.5-flash"
 GEMINI_TIMEOUT_SECONDS: int = 60
 
 APP_NAME: str = "IELTS AI Tutor"
